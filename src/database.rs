@@ -1,6 +1,7 @@
 use rusqlite::{Connection, params, Result};
 use std::path::Path;
 use std::collections::HashMap;
+use std::collections::hash_map::Iter;
 use std::ops::{Index, IndexMut};
 use std::hash::Hash;
 
@@ -10,29 +11,38 @@ enum Lazy<T> {
 }
 
 enum PartialMap<K: Hash + Eq, V> {
-    Empty,
     Partial(Box<HashMap<K, V>>),
     Full(Box<HashMap<K, V>>)
 }
 
 impl<K: Hash + Eq, V> PartialMap<K, V> {
-    fn get(&self, key: &K) -> Option<&V> {
+    pub fn get(&self, key: &K) -> Option<&V> {
         match self {
-            PartialMap::Empty => None,
             PartialMap::Partial(p) => p.get(key),
             PartialMap::Full(p) => p.get(key)
         }
     }
-}
 
-impl<'a, K: Hash + Eq, V> Index<&K> for PartialMap<K, V> {
-    type Output = Option<Borrow<V>>;
-
-    fn index<'b>(&self, key: &'b K) -> Self::Output {
+    pub fn set(&mut self, key: &K, value: &V) {
         match self {
-            PartialMap::Empty => None,
-            PartialMap::Partial(p) => p.get(key),
-            PartialMap::Full(p) => p.get(key)
+            PartialMap::Empty => {
+                *self = PartialMap::Partial(Box::new(HashMap::new()));
+                self.set(key, value)
+            },
+            PartialMap::Partial(p) => {
+                p.insert(*key, *value);
+            },
+            PartialMap::Full(p) => {
+                p.insert(*key, *value);
+            }
+        }
+    }
+
+    pub fn iter(&self) -> Iter<K, V> {
+        match self {
+            PartialMap::Empty => HashMap::new().iter(),
+            PartialMap::Partial(p) => p.iter(),
+            PartialMap::Full(p) => p.iter()
         }
     }
 }
@@ -44,10 +54,25 @@ struct Directory {
 }
 
 impl Directory {
-    pub fn files<D: Database>(&self, d: &D) -> Result<Vec<File>> {
+    pub fn files<D: Database>(&mut self, d: &D) -> Result<Vec<File>> {
         match self.files {
-            Lazy::NotLoaded => d.directory_files(self),
-            Lazy::Loaded(v) => Ok(*v.collect::<Vec<File>>())
+            PartialMap::Empty => {
+                let vec = d.directory_files(self)?;
+                let hm: HashMap<String, File> = vec.iter().map(|x| x.filename).zip(vec.iter().map(|x| *x)).collect();
+
+                self.files = PartialMap::Full(Box::new(hm));
+                Ok(self.files.iter().map(|t| *t.1).collect())
+            }
+            PartialMap::Partial(p) => {
+                let vec = d.directory_files(self)?;
+                let hm: HashMap<String, File> = vec.iter().map(|x| x.filename).zip(vec.iter().map(|x| *x)).collect();
+
+                self.files = PartialMap::Full(Box::new(hm));
+                Ok(self.files.iter().map(|t| *t.1).collect())
+            }
+            PartialMap::Full(p) => {
+                Ok(self.files.iter().map(|t| *t.1).collect())
+            }
         }
     }
 
