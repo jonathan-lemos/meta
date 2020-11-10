@@ -8,21 +8,21 @@ impl<'a, T> Lazy<'a, T> {
         Lazy::NotLoaded(f)
     }
 
-    pub fn get(&mut self) -> Box<T> {
+    pub fn get(&mut self) -> &T {
         match self {
             Lazy::NotLoaded(f) => {
                 let val = f();
                 *self = Lazy::Loaded(Box::new(val));
                 self.get()
             }
-            Lazy::Loaded(v) => *v
+            Lazy::Loaded(v) => v
         }
     }
 
-    pub fn get_if_loaded(&self) -> Option<Box<T>> {
+    pub fn get_if_loaded(&self) -> Option<&T> {
         match self {
             Lazy::NotLoaded(_) => None,
-            Lazy::Loaded(v) => Some(*v)
+            Lazy::Loaded(v) => Some(v)
         }
     }
 
