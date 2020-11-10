@@ -1,3 +1,5 @@
+
+
 use std::sync::Mutex;
 use std::sync::RwLockReadGuard;
 use std::sync::RwLockWriteGuard;
@@ -9,10 +11,12 @@ use crate::database::database::Database;
 use std::path::Path;
 use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
+use diesel::result::{ConnectionError};
+
 use crate::database::sqlite::SqliteError::*;
 
 pub enum SqliteError {
-    DbError(rusqlite::Error),
+    DbError(diesel::result::Error),
     ApplicationError(String),
 }
 
@@ -20,7 +24,7 @@ trait ToSqlite<T> {
     fn to_db_err(self) -> Result<T, SqliteError>;
 }
 
-impl<T> ToSqlite<T> for rusqlite::Result<T> {
+impl<T> ToSqlite<T> for diesel::result::QueryResult<T> {
     fn to_db_err(self) -> Result<T, SqliteError> {
         match self {
             Ok(t) => Ok(t),
@@ -29,148 +33,19 @@ impl<T> ToSqlite<T> for rusqlite::Result<T> {
     }
 }
 
-struct Locks {
-    file_mtx: RwLock<i32>,
-    file_meta_mtx: RwLock<i32>,
-    dir_mtx: RwLock<i32>,
-    dir_meta_mtx: RwLock<i32>
-}
-
-impl Locks {
-    pub fn new() -> Self {
-        Locks {
-            file_mtx: RwLock::new(0),
-            file_meta_mtx: RwLock::new(0),
-            dir_mtx: RwLock::new(0),
-            dir_meta_mtx: RwLock::new(0)
-        }
-    }
-
-    pub fn new_context(&self) -> LockContext<'_> {
-        LockContext {
-            file_mtx: None,
-            file_meta_mtx: None,
-            dir_mtx: None,
-            dir_meta_mtx: None,
-            locks: self
-        }
-    }
-}
-
-enum LockGuard<'a> {
-    Read(RwLockReadGuard<'a, i32>),
-    Write(RwLockWriteGuard<'a, i32>)
-}
-
-struct LockContext<'a> {
-    file_mtx: Option<LockGuard<'a>>,
-    file_meta_mtx: Option<LockGuard<'a>>,
-    dir_mtx: Option<LockGuard<'a>>,
-    dir_meta_mtx: Option<LockGuard<'a>>,
-    locks: &'a Locks
-}
-
-impl<'a> LockContext<'a> {
-    pub fn read_file(&mut self) {
-        match self.file_mtx {
-            None => {
-                self.file_mtx = Some(LockGuard::Read(self.locks.file_mtx.read().unwrap()));
-            }
-            Some(s) => {
-                match s {
-                    LockGuard::Read(r) => {}
-                    LockGuard::Write(w) => {
-                        {
-                            self.file_mtx = None
-                        }
-                        self.file_mtx = Some(LockGuard::Write(self.locks.file_mtx.write().unwrap()))
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn read_file_meta(&mut self) {
-        match self.file_meta_mtx {
-            None => {
-                self.file_meta_mtx = Some(LockGuard::Read(self.locks.file_meta_mtx.read().unwrap()));
-            }
-            Some(s) => {
-                match s {
-                    LockGuard::Read(r) => {}
-                    LockGuard::Write(w) => {
-                        {
-                            self.file_meta_mtx = None
-                        }
-                        self.file_meta_mtx = Some(LockGuard::Write(self.locks.file_meta_mtx.write().unwrap()))
-                    }
-                }
-            }
-        }
-    }
-
-}
-
-
 pub struct SqliteDatabase {
-    conn: Connection,
-    lock_lock: Mutex<i32>,
+    conn: SqliteConnection,
 }
 
-impl Drop for SqliteDatabase {
-    fn drop(&mut self) {
-        self.conn.close();
-    }
-}
+embed_migrations!();
 
 impl SqliteDatabase {
-    fn prepare(&self, sql: &str) -> Result<(rusqlite::Statement, Vec<RwLockReadGuard<i32>>, Vec<RwLockWriteGuard<i32>>), SqliteError> {
-        let _ = self.lock_lock.lock().unwrap();
+    pub fn new<P: AsRef<Path>>(path: &str) -> Result<Self, ConnectionError> {
+        let conn = SqliteConnection::establish(path)?;
 
-        let res = self.conn.prepare(sql).to_db_err()?;
-        let read_locks = Vec::new();
-        let write_locks = Vec::new();
+        embedded_migrations::run(&conn);
 
-        if sql.trim_start().starts_with("SELECT") {
-            if sql.contains("Files") {
-                read_locks.push(self.file_mtx.read().unwrap());
-            }
-    
-            if sql.contains("Directories") {
-                read_locks.push(self.dir_mtx.read().unwrap());
-            }
-    
-            if sql.contains("FileMetadata") {
-                read_locks.push(self.file_meta_mtx.read().unwrap());
-            }
-    
-            if sql.contains("DirectoryMetadata") {
-                read_locks.push(self.dir_meta_mtx.read().unwrap());
-            }
-        }
-        else {
-            if sql.contains("Files") {
-                write_locks.push(self.file_mtx.write().unwrap());
-            }
-    
-            if sql.contains("Directories") {
-                write_locks.push(self.dir_mtx.write().unwrap());
-            }
-    
-            if sql.contains("FileMetadata") {
-                write_locks.push(self.file_meta_mtx.write().unwrap());
-            }
-    
-            if sql.contains("DirectoryMetadata") {
-                write_locks.push(self.dir_meta_mtx.write().unwrap());
-            }
-        }
-
-        Ok((res, read_locks, write_locks))
-    }
-
-    pub fn new<P: AsRef<Path>>(path: &str) -> Result<Self, SqliteError> {
-        let conn = SqliteConnection::establish(path);
+        Ok(SqliteDatabase { conn })
     }
 }
 

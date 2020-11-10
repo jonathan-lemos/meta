@@ -1,3 +1,5 @@
 pub mod database;
-pub mod sqlite;
+pub mod models;
 pub mod path;
+pub mod schema;
+pub mod sqlite;
