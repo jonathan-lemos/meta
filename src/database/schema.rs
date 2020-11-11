@@ -8,7 +8,7 @@ table! {
 table! {
     DirectoryMetadata (id) {
         id -> Integer,
-        directoryId -> Integer,
+        directory_id -> Integer,
         key -> Text,
         value -> Text,
     }
@@ -17,7 +17,7 @@ table! {
 table! {
     FileMetadata (id) {
         id -> Integer,
-        fileId -> Integer,
+        file_id -> Integer,
         key -> Text,
         value -> Text,
     }
@@ -26,15 +26,15 @@ table! {
 table! {
     Files (id) {
         id -> Integer,
-        directoryId -> Integer,
+        directory_id -> Integer,
         filename -> Text,
         hash -> Text,
     }
 }
 
-joinable!(DirectoryMetadata -> Directories (directoryId));
-joinable!(FileMetadata -> Files (fileId));
-joinable!(Files -> Directories (directoryId));
+joinable!(DirectoryMetadata -> Directories (directory_id));
+joinable!(FileMetadata -> Files (file_id));
+joinable!(Files -> Directories (directory_id));
 
 allow_tables_to_appear_in_same_query!(
     Directories,

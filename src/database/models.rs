@@ -1,9 +1,10 @@
 use super::schema::*;
 use super::path::parent_dir;
 
-#[derive(Queryable)]
+#[derive(Identifiable, Queryable)]
+#[table_name="Directories"]
 pub struct Directory {
-    pub id: u32,
+    pub id: i32,
     pub path: String,
 }
 
@@ -19,16 +20,21 @@ impl Directory {
     }
 }
 
-#[derive(Queryable)]
+#[derive(Identifiable, Queryable, PartialEq, Associations, Debug)]
+#[belongs_to(Directory)]
+#[table_name = "Files"]
 pub struct File {
-    pub id: u32,
+    pub id: i32,
+    pub directory_id: i32,
     pub filename: String,
     pub hash: String,
 }
 
-#[derive(Insertable)]
+#[derive(Insertable, PartialEq, Associations, Debug)]
+#[belongs_to(Directory)]
 #[table_name = "Files"]
 pub struct NewFile<'a> {
+    pub directory_id: i32,
     pub filename: &'a str,
     pub hash: &'a str 
 }
@@ -39,20 +45,40 @@ impl File {
     }
 }
 
-#[derive(Queryable, PartialEq, Associations(foreign_key="fileId"), Debug)]
+#[derive(Identifiable, Queryable, PartialEq, Associations, Debug)]
+#[belongs_to(File)]
 #[table_name = "FileMetadata"]
-#[belongs_to(File, foreign_key="fileId")]
-pub struct FileMetadata {
-    pub id: u32,
-    pub fileId: u32,
+pub struct FileKeyValuePair {
+    pub id: i32,
+    pub file_id: i32,
     pub key: String,
     pub value: String
 }
 
-#[derive(Insertable, Debug)]
-pub struct NewFileMetadata {
-    pub id: u32,
-    pub fileId: u32,
+#[derive(Insertable, Associations, Debug)]
+#[belongs_to(File)]
+#[table_name = "FileMetadata"]
+pub struct NewFileKeyValuePair<'a> {
+    pub file_id: i32,
+    pub key: &'a str,
+    pub value: &'a str
+}
+
+#[derive(Identifiable, Queryable, PartialEq, Associations, Debug)]
+#[belongs_to(Directory)]
+#[table_name = "DirectoryMetadata"]
+pub struct DirectoryKeyValuePair {
+    pub id: i32,
+    pub directory_id: i32,
     pub key: String,
     pub value: String
+}
+
+#[derive(Insertable, Associations, Debug)]
+#[belongs_to(Directory)]
+#[table_name = "DirectoryMetadata"]
+pub struct NewDirectoryKeyValuePair<'a> {
+    pub directory_id: i32,
+    pub key: &'a str,
+    pub value: &'a str
 }

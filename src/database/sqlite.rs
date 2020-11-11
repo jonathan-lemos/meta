@@ -1,14 +1,7 @@
+use super::models::*;
+use super::database::Database;
 
-
-use std::sync::Mutex;
-use std::sync::RwLockReadGuard;
-use std::sync::RwLockWriteGuard;
-use std::sync::{RwLock, PoisonError};
 use std::iter::FromIterator;
-use crate::database::database::File;
-use crate::database::database::Directory;
-use crate::database::database::Database;
-use std::path::Path;
 use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
 use diesel::result::{ConnectionError};
@@ -40,8 +33,8 @@ pub struct SqliteDatabase {
 embed_migrations!();
 
 impl SqliteDatabase {
-    pub fn new<P: AsRef<Path>>(path: &str) -> Result<Self, ConnectionError> {
-        let conn = SqliteConnection::establish(path)?;
+    pub fn new(file_path: &str) -> Result<Self, ConnectionError> {
+        let conn = SqliteConnection::establish(file_path)?;
 
         embedded_migrations::run(&conn);
 
@@ -51,56 +44,47 @@ impl SqliteDatabase {
 
 impl<'a> Database<'a, SqliteError> for SqliteDatabase {
     fn file_directory(&self, f: &File) -> Result<Directory, SqliteError> {
-        let (prep, _, _) = self.prepare("SELECT d.id, d.path FROM Directories d INNER JOIN Files f ON f.directoryId = d.Id WHERE f.filename = ?")?;
-        let rows = prep.query_map(params![f.filename()], |row| Ok(Directory {
-            id: row.get(0)?,
-            path: row.get(1)?,
+        use super::schema::Files::dsl::*;
+        use super::schema::Directories::dsl::*;
 
-        })).to_db_err()?;
-
-        for dir in rows {
-            return Ok(dir.unwrap());
-        }
-
-        Err(ApplicationError(format!("The file '{}' does not have a parent directory in the database.", f.filename())))
+        Ok(Files.inner_join(Directories)
+            .first::<(File, Directory)>(&self.conn).to_db_err()?
+            .1)
     }
 
     fn file_metadata<B: FromIterator<(String, String)>>(&self, f: &File) -> Result<B, SqliteError> {
-        let (prep, _, _) = self.prepare("SELECT m.key, m.value FROM FileMetadata m INNER JOIN Files f ON m.fileId = f.id WHERE f.filename = ?").to_db_err()?;
-        let rows = prep.query_map(params![f.filename()], |row| Ok((row.get(0)?, row.get(1)?))).to_db_err()?;
+        use super::schema::FileMetadata::dsl::*;
 
-        let res = rows.map(|r| r.unwrap());
-        
-        Ok(res.collect())
+        Ok(FileKeyValuePair::belonging_to(f)
+            .select((key, value))
+            .load::<(String, String)>(&self.conn).to_db_err()?
+            .iter()
+            .map(|x| *x)
+            .collect())
     }
 
-    fn file_metadata_get(&self, f: &File, key: &str) -> Result<Option<String>, SqliteError> {
-        let (prep, _, _) = self.prepare("SELECT m.value FROM FileMetadata m INNER JOIN Files f ON m.fileId = f.id WHERE f.filename = ? AND m.key = ?").to_db_err()?;
-        let rows = prep.query_map(params![f.filename(), key], |row| Ok(row.get(0)?)).to_db_err()?;
+    fn file_metadata_get(&self, f: &File, k: &str) -> Result<Option<String>, SqliteError> {
+        use super::schema::FileMetadata::dsl::*;
 
-        let res = rows.map(|r| r.unwrap());
-        
-        for val in res {
-            return Ok(Some(val));
+        let res = FileKeyValuePair::belonging_to(f)
+            .filter(key.eq(k))
+            .select(value)
+            .first::<String>(&self.conn);
+
+        match res {
+            Ok(s) => Ok(Some(s)),
+            Err(e) => {
+                if let NotFound = e {
+                    Ok(None)
+                }
+                else {
+                    Err(DbError(e))
+                }
+            }
         }
-
-        Ok(None)
     }
 
     fn file_metadata_set(&self, f: &File, key: &str, value: Option<&str>) -> Result<Option<String>, SqliteError> {
-        if let val = Some(value) {
-            let (prep, _, _) = self.prepare("INSERT OR IGNORE INTO FileMetadata VALUES (?, ?)").to_db_err()?;
-            let rows = prep.query_map(params![key, value], |row| Ok(row.get(0)?)).to_db_err()?;
-
-            let res = rows.map(|r| r.unwrap());
-        
-            for val in res {
-                return Ok(Some(val));
-            }
-
-            Ok(None)
-        }
-
-        Ok(None)
     }
+    */
 }

@@ -6,29 +6,29 @@ CREATE TABLE IF NOT EXISTS Directories (
 
 CREATE TABLE IF NOT EXISTS Files (
     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    directoryId INTEGER NOT NULL,
+    directory_id INTEGER NOT NULL,
     filename TEXT NOT NULL UNIQUE,
     hash VARCHAR(64) NOT NULL,
-    FOREIGN KEY (directoryId) REFERENCES Directories(id)
+    FOREIGN KEY (directory_id) REFERENCES Directories(id)
 );
 
 CREATE INDEX idx_files_hash ON Files(hash);
 
 CREATE TABLE IF NOT EXISTS DirectoryMetadata (
     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    directoryId INTEGER NOT NULL,
+    directory_id INTEGER NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
-    UNIQUE(directoryId, key),
-    FOREIGN KEY (directoryId) REFERENCES Directories(id)
+    UNIQUE(directory_id, key),
+    FOREIGN KEY (directory_id) REFERENCES Directories(id)
 );
 
 CREATE TABLE IF NOT EXISTS FileMetadata (
     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    fileId INTEGER NOT NULL,
+    file_id INTEGER NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
-    UNIQUE(fileId, key),
-    FOREIGN KEY (fileId) REFERENCES Files(id)
+    UNIQUE(file_id, key),
+    FOREIGN KEY (file_id) REFERENCES Files(id)
 );
 
