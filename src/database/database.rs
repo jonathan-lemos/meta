@@ -9,16 +9,19 @@ pub trait Database<'a, E> {
 
     fn directory_file(&self, d: &Directory, filename: &str) -> Result<Option<File>, E>;
     fn directory_files<B: FromIterator<&'a File>>(&self, d: &Directory) -> Result<B, E>;
-    fn directory_files_with_key<B: FromIterator<&'a File>>(&self, key: &str) -> Result<B, E>;
-    fn directory_files_with_key_and_value<B: FromIterator<&'a File>>(&self, key: &str, value: &str) -> Result<B, E>;
+    fn directory_files_with_key<B: FromIterator<&'a File>>(&self, d: &Directory, key: &str) -> Result<B, E>;
+    fn directory_files_with_key_and_value<B: FromIterator<&'a File>>(&self, d: &Directory, key: &str, value: &str) -> Result<B, E>;
     fn directory_metadata<B: FromIterator<(String, String)>>(&self, d: &Directory) -> Result<B, E>;
     fn directory_metadata_get(&self, d: &Directory, key: &str) -> Result<Option<String>, E>;
     fn directory_metadata_set(&self, d: &Directory, key: &str, value: Option<&str>) -> Result<Option<String>, E>;
 
-    fn get_directory(&self, path: &str) -> Option<Directory>;
+    fn get_directory(&self, path: &str) -> Result<Option<Directory>, E>;
     fn get_directories<B: FromIterator<&'a Directory>>(&self) -> Result<B, E>;
     fn get_directories_with_key<B: FromIterator<&'a Directory>>(&self, key: &str) -> Result<B, E>;
     fn get_directories_with_key_and_value<B: FromIterator<&'a Directory>>(&self, key: &str, value: &str) -> Result<B, E>;
+
+    fn get_file(&self, path: &str) -> Result<Option<(File, Directory)>, E>;
+    fn get_files<B: FromIterator<&'a File>>(&self) -> Result<B, E>;
     fn get_files_with_key<B: FromIterator<&'a File>>(&self, key: &str) -> Result<B, E>;
     fn get_files_with_key_and_value<B: FromIterator<&'a File>>(&self, key: &str, value: &str) -> Result<B, E>;
 

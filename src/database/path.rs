@@ -19,6 +19,27 @@ pub fn parent_dir(path: &str) -> Option<&str> {
     None
 }
 
+pub fn filename(path: &str) -> &str {
+    let count = 0;
+    let it = path.chars().rev();
+
+    match it.next() {
+        Some(c) => {
+            count += 1;
+        }
+        None => return ""
+    }
+
+    for c in it {
+        if c == '/' {
+            return &path[path.len() - count..];
+        }
+        count += 1
+    }
+
+    path
+}
+
 #[test]
 fn test_parent_dir() {
     assert_eq!(parent_dir("/foo/bar"), Some("/foo"));
@@ -31,4 +52,18 @@ fn test_parent_dir() {
     assert_eq!(parent_dir("/f"), Some("/"));
     assert_eq!(parent_dir("/"), None);
     assert_eq!(parent_dir(""), None);
+}
+
+#[test]
+fn test_filename() {
+    assert_eq!(filename("/foo/bar"), "bar");
+    assert_eq!(filename("/foo/bar/"), "");
+    assert_eq!(filename("/f/b"), "b");
+    assert_eq!(filename("/f/b/"), "");
+    assert_eq!(filename("/foo/"), "");
+    assert_eq!(filename("/foo"), "foo");
+    assert_eq!(filename("/f/"), "");
+    assert_eq!(filename("/f"), "f");
+    assert_eq!(filename("/"), "");
+    assert_eq!(filename(""), "");
 }
