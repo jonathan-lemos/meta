@@ -28,7 +28,7 @@ table! {
         id -> Integer,
         directory_id -> Integer,
         filename -> Text,
-        hash -> Text,
+        hash -> Binary,
     }
 }
 

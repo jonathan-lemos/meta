@@ -19,6 +19,20 @@ pub fn parent_dir(path: &str) -> Option<&str> {
     None
 }
 
+#[test]
+fn test_parent_dir() {
+    assert_eq!(parent_dir("/foo/bar"), Some("/foo"));
+    assert_eq!(parent_dir("/foo/bar/"), Some("/foo"));
+    assert_eq!(parent_dir("/f/b"), Some("/f"));
+    assert_eq!(parent_dir("/f/b/"), Some("/f"));
+    assert_eq!(parent_dir("/foo/"), Some("/"));
+    assert_eq!(parent_dir("/foo"), Some("/"));
+    assert_eq!(parent_dir("/f/"), Some("/"));
+    assert_eq!(parent_dir("/f"), Some("/"));
+    assert_eq!(parent_dir("/"), None);
+    assert_eq!(parent_dir(""), None);
+}
+
 pub fn filename(path: &str) -> &str {
     let count = 0;
     let it = path.chars().rev();
@@ -41,20 +55,6 @@ pub fn filename(path: &str) -> &str {
 }
 
 #[test]
-fn test_parent_dir() {
-    assert_eq!(parent_dir("/foo/bar"), Some("/foo"));
-    assert_eq!(parent_dir("/foo/bar/"), Some("/foo"));
-    assert_eq!(parent_dir("/f/b"), Some("/f"));
-    assert_eq!(parent_dir("/f/b/"), Some("/f"));
-    assert_eq!(parent_dir("/foo/"), Some("/"));
-    assert_eq!(parent_dir("/foo"), Some("/"));
-    assert_eq!(parent_dir("/f/"), Some("/"));
-    assert_eq!(parent_dir("/f"), Some("/"));
-    assert_eq!(parent_dir("/"), None);
-    assert_eq!(parent_dir(""), None);
-}
-
-#[test]
 fn test_filename() {
     assert_eq!(filename("/foo/bar"), "bar");
     assert_eq!(filename("/foo/bar/"), "");
@@ -66,4 +66,13 @@ fn test_filename() {
     assert_eq!(filename("/f"), "f");
     assert_eq!(filename("/"), "");
     assert_eq!(filename(""), "");
+}
+
+pub fn preprocess(p: &str) -> &str {
+    p.trim_end_matches("/");
+    p.trim_start_matches("//");
+    if !p.starts_with("/") {
+        p = &("/".to_owned() + p);
+    }
+    p
 }

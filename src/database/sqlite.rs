@@ -1,7 +1,8 @@
 use std::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use super::models::*;
 use super::database::Database;
-use super::path::{filename, parent_dir};
+use super::path::{parent_dir, preprocess};
+use super::option_result::OptionResult;
 
 use std::iter::FromIterator;
 use diesel::{insert_into, update, delete};
@@ -27,26 +28,6 @@ impl<T> ToSqlite<T> for diesel::result::QueryResult<T> {
         match self {
             Ok(t) => Ok(t),
             Err(e) => Err(DbError(e))
-        }
-    }
-}
-
-trait ToOptionResult<T> {
-    fn to_option_result(self) -> Result<Option<T>, SqliteError>;
-}
-
-impl<T> ToOptionResult<T> for diesel::result::QueryResult<T> {
-    fn to_option_result(self) -> Result<Option<T>, SqliteError> {
-        match self {
-            Ok(s) => Ok(Some(s)),
-            Err(e) => {
-                if let NotFound = e {
-                    Ok(None)
-                }
-                else {
-                    Err(DbError(e))
-                }
-            }
         }
     }
 }
@@ -230,7 +211,7 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
             .filter(key.eq(k))
             .select(value)
             .first::<String>(&self.conn)
-            .to_option_result()
+            .optional().to_db_err()
     }
 
     fn file_metadata_set(&self, f: &File, k: &str, v: Option<&str>) -> Result<Option<String>, SqliteError> {
@@ -297,10 +278,10 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
             .filter(filename.eq(fname))
             .first::<(Directory, File)>(&self.conn)
             .map(|x| x.1)
-            .to_option_result()
+            .optional().to_db_err()
     }
 
-    fn directory_files<B: FromIterator<&'a File>>(&self, d: &Directory) -> Result<B, SqliteError> {
+    fn directory_files<B: FromIterator<File>>(&self, d: &Directory) -> Result<B, SqliteError> {
         use super::schema::Directories::dsl::*;
         use super::schema::Files::dsl::*;
 
@@ -313,13 +294,13 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
             .inner_join(Files)
             .load::<(Directory, File)>(&self.conn).to_db_err()?
             .iter()
-            .map(|x| &x.1)
+            .map(|x| x.1)
             .collect();
 
         Ok(res)
     }
 
-    fn directory_files_with_key<B: FromIterator<&'a File>>(&self, d: &Directory, k: &str) -> Result<B, SqliteError> {
+    fn directory_files_with_key<B: FromIterator<File>>(&self, d: &Directory, k: &str) -> Result<B, SqliteError> {
         use super::schema::Directories::dsl::*;
         use super::schema::Files::dsl::*;
         use super::schema::FileMetadata::dsl::*;
@@ -334,13 +315,13 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
             .inner_join(Directories)
             .load::<(File, FileKeyValuePair, Directory)>(&self.conn).to_db_err()?
             .iter()
-            .map(|x| &x.0)
+            .map(|x| x.0)
             .collect();
 
         Ok(res)
     }
 
-    fn directory_files_with_key_and_value<B: FromIterator<&'a File>>(&self, d: &Directory, k: &str, v: &str) -> Result<B, SqliteError> {
+    fn directory_files_with_key_and_value<B: FromIterator<File>>(&self, d: &Directory, k: &str, v: &str) -> Result<B, SqliteError> {
         use super::schema::Directories::dsl::*;
         use super::schema::Files::dsl::*;
         use super::schema::FileMetadata::dsl::*;
@@ -355,7 +336,7 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
             .inner_join(Directories)
             .load::<(File, FileKeyValuePair, Directory)>(&self.conn).to_db_err()?
             .iter()
-            .map(|x| &x.0)
+            .map(|x| x.0)
             .collect();
 
         Ok(res)
@@ -389,7 +370,7 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
             .filter(key.eq(k))
             .select(value)
             .first::<String>(&self.conn)
-            .to_option_result()
+            .optional().to_db_err()
     }
 
     fn directory_metadata_set(&self, d: &Directory, k: &str, v: Option<&str>) -> Result<Option<String>, SqliteError> {
@@ -449,32 +430,29 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
             (Field::Dir, Operation::Read),
         ]);
 
-        if !p.starts_with("/") {
-            return Err(ApplicationError(format!("A directory path must start with '/' ('{}' was given).", p)));
-        }
-
-        p = p.trim_end_matches("/");
+        p = preprocess(p);
         
         Directories.filter(path.eq(p).or(path.eq(p.trim_end_matches("/"))))
             .first::<Directory>(&self.conn)
-            .to_option_result()
+            .optional().to_db_err()
     }
 
-    fn get_directories<B: FromIterator<&'a Directory>>(&self) -> Result<B, SqliteError> {
+    fn get_directories<B: FromIterator<Directory>>(&self) -> Result<B, SqliteError> {
         use super::schema::Directories::dsl::*;
 
         let _ = self.locks.context().lock(&[
             (Field::Dir, Operation::Read),
         ]);
         
-        let res = Directories.load::<Directory>(&self.conn)?
+        let res = Directories.load::<Directory>(&self.conn).to_db_err()?
                     .iter()
+                    .map(|x| *x)
                     .collect();
 
         Ok(res)
     }
 
-    fn get_directories_with_key<B: FromIterator<&'a Directory>>(&self, k: &str) -> Result<B, SqliteError> {
+    fn get_directories_with_key<B: FromIterator<Directory>>(&self, k: &str) -> Result<B, SqliteError> {
         use super::schema::Directories::dsl::*;
         use super::schema::DirectoryMetadata::dsl::*;
 
@@ -488,13 +466,13 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
             .inner_join(Directories)
             .load::<(DirectoryKeyValuePair, Directory)>(&self.conn).to_db_err()?
             .iter()
-            .map(|x| &x.1)
+            .map(|x| x.1)
             .collect();
 
         Ok(res)
     }
 
-    fn get_directories_with_key_and_value<B: FromIterator<&'a Directory>>(&self, k: &str, v: &str) -> Result<B, SqliteError> {
+    fn get_directories_with_key_and_value<B: FromIterator<Directory>>(&self, k: &str, v: &str) -> Result<B, SqliteError> {
         use super::schema::Directories::dsl::*;
         use super::schema::DirectoryMetadata::dsl::*;
 
@@ -508,7 +486,7 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
             .inner_join(Directories)
             .load::<(DirectoryKeyValuePair, Directory)>(&self.conn).to_db_err()?
             .iter()
-            .map(|x| &x.1)
+            .map(|x| x.1)
             .collect();
 
         Ok(res)
@@ -516,34 +494,42 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
 
     fn get_file(&self, p: &str) -> Result<Option<(File, Directory)>, SqliteError> {
         use super::schema::Directories::dsl::*;
+        use super::schema::Files::dsl::*;
 
         let _ = self.locks.context().lock(&[
             (Field::Dir, Operation::Read),
             (Field::File, Operation::Read),
         ]);
 
-        if !p.starts_with("/") {
-            return Err(ApplicationError(format!("A file path must start with '/' ('{}' was given).", p)));
-        }
-
-        if p.ends_with("/") {
-            return Err(ApplicationError(format!("A file path cannot end with '/' ('{}' was given).", p)));
-        }
+        p = preprocess(p);
 
         let parent = match parent_dir(p) {
             Some(s) => s,
             None => return Err(ApplicationError("The path does not have a parent directory ('{}' was given).".to_owned()))
         };
 
-        let fname = filename(p);
+        let fname = super::path::filename(p);
         
-        let dir = Directories.filter(path.eq(parent))
+        let dir = match Directories.filter(path.eq(parent))
                     .inner_join(Files)
+                    .filter(filename.eq(fname))
+                    .first::<(Directory, File)>(&self.conn).optional().to_db_err() {
+                        Err(e) => return Err(e),
+                        Ok(v) => match v {
+                            Some(s) => s.0,
+                            None => return Ok(None)
+                        }
+                    };
 
-
+        File::belonging_to(&dir)
+            .filter(filename.eq(fname))
+            .first::<File>(&self.conn)
+            .optional()
+            .map_value(|s| (s, dir))
+            .to_db_err()
     }
 
-    fn get_files<B: FromIterator<&'a File>>(&self) -> Result<B, SqliteError> {
+    fn get_files<B: FromIterator<File>>(&self) -> Result<B, SqliteError> {
         use super::schema::Files::dsl::*;
 
         let _ = self.locks.context().lock(&[
@@ -552,12 +538,13 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
         
         let res = Files.load::<File>(&self.conn).to_db_err()?
                     .iter()
+                    .map(|x| *x)
                     .collect();
 
         Ok(res)
     }
 
-    fn get_files_with_key<B: FromIterator<&'a File>>(&self, k: &str) -> Result<B, SqliteError> {
+    fn get_files_with_key<B: FromIterator<File>>(&self, k: &str) -> Result<B, SqliteError> {
         use super::schema::Files::dsl::*;
         use super::schema::FileMetadata::dsl::*;
 
@@ -571,13 +558,13 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
             .inner_join(Files)
             .load::<(FileKeyValuePair, File)>(&self.conn).to_db_err()?
             .iter()
-            .map(|x| &x.1)
+            .map(|x| x.1)
             .collect();
 
         Ok(res)
     }
 
-    fn get_files_with_key_and_value<B: FromIterator<&'a File>>(&self, k: &str, v: &str) -> Result<B, SqliteError> {
+    fn get_files_with_key_and_value<B: FromIterator<File>>(&self, k: &str, v: &str) -> Result<B, SqliteError> {
         use super::schema::Files::dsl::*;
         use super::schema::FileMetadata::dsl::*;
 
@@ -591,10 +578,85 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
             .inner_join(Files)
             .load::<(FileKeyValuePair, File)>(&self.conn).to_db_err()?
             .iter()
-            .map(|x| &x.1)
+            .map(|x| x.1)
             .collect();
 
         Ok(res)
+    }
+
+    fn add_directory(&self, p: &str) -> Result<(Directory, bool), SqliteError> {
+        use super::schema::Directories::dsl::*;
+
+        let _ = self.locks.context().lock(&[
+            (Field::Dir, Operation::Write),
+        ]);
+
+        p = preprocess(p);
+
+        let res = insert_into(Directories)
+            .values(NewDirectory {
+                path: p
+            })
+            .execute(&self.conn).to_db_err()?;
+
+        let dir = Directories.filter(path.eq(p))
+            .first::<Directory>(&self.conn).to_db_err()?;
+
+        if res == 0 {
+            return Ok((dir, false));
+        }
+
+        while let Some(p) = parent_dir(p) {
+            let res = insert_into(Directories)
+                .values(NewDirectory {
+                    path: p
+                })
+                .execute(&self.conn).to_db_err()?;
+            
+            if res == 0 {
+                break;
+            }
+        }
+
+        return Ok((dir, true));
+
+    }
+
+    fn add_file(&self, p: &str) -> Result<(File, bool), SqliteError> {
+        use super::schema::Files::dsl::*;
+
+        let _ = self.locks.context().lock(&[
+            (Field::Dir, Operation::Write),
+        ]);
+
+        p = preprocess(p);
+
+        let res = insert_into(Files)
+            .values(NewFile {
+                filename: p
+            })
+            .execute(&self.conn).to_db_err()?;
+
+        let file = Files.filter(filename.eq(p))
+            .first::<File>(&self.conn).to_db_err()?;
+
+        if res == 0 {
+            return Ok((dir, false));
+        }
+
+        while let Some(p) = parent_dir(p) {
+            let res = insert_into(Directories)
+                .values(NewDirectory {
+                    path: p
+                })
+                .execute(&self.conn).to_db_err()?;
+            
+            if res == 0 {
+                break;
+            }
+        }
+
+        return Ok((dir, true));
     }
 
 }

@@ -33,7 +33,7 @@ pub struct File {
     pub id: i32,
     pub directory_id: i32,
     pub filename: String,
-    pub hash: String,
+    pub hash: Vec<u8> 
 }
 
 #[derive(Insertable, PartialEq, Associations, Debug)]
@@ -42,7 +42,7 @@ pub struct File {
 pub struct NewFile<'a> {
     pub directory_id: i32,
     pub filename: &'a str,
-    pub hash: &'a str 
+    pub hash: &'a [u8]
 }
 
 impl File {

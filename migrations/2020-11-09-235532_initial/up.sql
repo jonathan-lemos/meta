@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS Files (
     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     directory_id INTEGER NOT NULL,
     filename TEXT NOT NULL UNIQUE,
-    hash VARCHAR(64) NOT NULL,
-    FOREIGN KEY (directory_id) REFERENCES Directories(id)
+    hash BLOB NOT NULL,
+    FOREIGN KEY (directory_id) REFERENCES Directories(id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE INDEX idx_files_hash ON Files(hash);
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS DirectoryMetadata (
     key TEXT NOT NULL,
     value TEXT NOT NULL,
     UNIQUE(directory_id, key),
-    FOREIGN KEY (directory_id) REFERENCES Directories(id)
+    FOREIGN KEY (directory_id) REFERENCES Directories(id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS FileMetadata (
@@ -29,6 +29,6 @@ CREATE TABLE IF NOT EXISTS FileMetadata (
     key TEXT NOT NULL,
     value TEXT NOT NULL,
     UNIQUE(file_id, key),
-    FOREIGN KEY (file_id) REFERENCES Files(id)
+    FOREIGN KEY (file_id) REFERENCES Files(id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
