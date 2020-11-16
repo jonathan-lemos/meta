@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 table! {
     Directories (id) {
         id -> Integer,

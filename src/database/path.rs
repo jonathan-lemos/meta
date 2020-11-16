@@ -1,9 +1,9 @@
 pub fn parent_dir(path: &str) -> Option<&str> {
-    let count = 0;
-    let it = path.chars().rev();
+    let mut count = 0;
+    let mut it = path.chars().rev();
 
     match it.next() {
-        Some(c) => {
+        Some(_c) => {
             count += 1;
         }
         None => return None
@@ -34,11 +34,11 @@ fn test_parent_dir() {
 }
 
 pub fn filename(path: &str) -> &str {
-    let count = 0;
-    let it = path.chars().rev();
+    let mut count = 0;
+    let mut it = path.chars().rev();
 
     match it.next() {
-        Some(c) => {
+        Some(_c) => {
             count += 1;
         }
         None => return ""
@@ -68,11 +68,15 @@ fn test_filename() {
     assert_eq!(filename(""), "");
 }
 
-pub fn preprocess(p: &str) -> &str {
-    p.trim_end_matches("/");
-    p.trim_start_matches("//");
+pub fn preprocess(p: &str) -> String {
+    let p = p.trim_end_matches("/");
+    let p = p.trim_start_matches("//");
     if !p.starts_with("/") {
-        p = &("/".to_owned() + p);
+        let mut tmp = "/".to_owned();
+        tmp += p;
+        tmp
     }
-    p
+    else {
+        p.to_owned()
+    }
 }

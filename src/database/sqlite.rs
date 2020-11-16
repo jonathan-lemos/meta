@@ -1,14 +1,12 @@
-use std::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use super::models::*;
 use super::database::Database;
 use super::path::{parent_dir, preprocess};
 use super::option_result::OptionResult;
 
 use std::iter::FromIterator;
-use diesel::{insert_into, update, delete};
+use diesel::{insert_into, insert_or_ignore_into, update, delete};
 use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
-use diesel::result::{ConnectionError};
 
 use crate::database::sqlite::SqliteError::*;
 
@@ -34,137 +32,22 @@ impl<T> ToSqlite<T> for diesel::result::QueryResult<T> {
 
 pub struct SqliteDatabase {
     conn: SqliteConnection,
-    locks: SqliteLocks
 }
 
-struct SqliteLocks {
-    file_lock: RwLock<i32>,
-    dir_lock: RwLock<i32>,
-    file_meta_lock: RwLock<i32>,
-    dir_meta_lock: RwLock<i32>,
-    mtx: Mutex<i32>
-}
-
-impl SqliteLocks {
-    pub fn new() -> Self {
-        SqliteLocks {
-            file_lock: RwLock::new(0),
-            dir_lock: RwLock::new(0),
-            file_meta_lock: RwLock::new(0),
-            dir_meta_lock: RwLock::new(0),
-            mtx: Mutex::new(0)
-        }        
-    }
-
-    pub fn context(&self) -> &SqliteLockContext {
-        &SqliteLockContext {
-            file_guard: LockGuard::None,
-            dir_guard: LockGuard::None,
-            file_meta_guard: LockGuard::None,
-            dir_meta_guard: LockGuard::None,
-            locks: self
-        }
-    }
-}
-
-enum LockGuard<'a> {
-    None,
-    Read(RwLockReadGuard<'a, i32>),
-    Write(RwLockWriteGuard<'a, i32>)
-}
-
-struct SqliteLockContext<'a> {
-    file_guard: LockGuard<'a>,
-    dir_guard: LockGuard<'a>,
-    file_meta_guard: LockGuard<'a>,
-    dir_meta_guard: LockGuard<'a>,
-    locks: &'a SqliteLocks
-}
-
-#[derive(PartialEq, Eq, Debug, Hash)]
-enum Field {
-    File,
-    Dir,
-    FileMeta,
-    DirMeta
-}
-
-#[derive(PartialEq, Eq, Debug, Hash)]
-enum Operation {
-    Read,
-    Write
-}
-
-impl<'a> SqliteLockContext<'a> {
-    pub fn lock(&self, request: &[(Field, Operation)]) -> &Self {
-        let _ = self.locks.mtx.lock().expect("Lock mutex is poisoned. This should never happen.");
-
-        for (field, operation) in request {
-            let guard = match field {
-                Field::File => &mut self.file_guard,
-                Field::Dir => &mut self.dir_guard,
-                Field::FileMeta => &mut self.file_meta_guard,
-                Field::DirMeta => &mut self.dir_meta_guard
-            };
-
-            let lock = match field {
-                Field::File => &self.locks.file_lock,
-                Field::Dir => &self.locks.dir_lock,
-                Field::FileMeta => &self.locks.file_meta_lock,
-                Field::DirMeta => &self.locks.dir_meta_lock
-            };
-
-            match guard {
-                LockGuard::None => {
-                    match operation {
-                        Operation::Read => *guard = LockGuard::Read(lock.read().expect("Lock is poisoned. This should never happen.")),
-                        Operation::Write => *guard = LockGuard::Write(lock.write().expect("Lock is poisoned. This should never happen."))
-                    }
-                },
-                LockGuard::Read(r) => {
-                    match operation {
-                        Operation::Read => {},
-                        Operation::Write => {
-                            {
-                                *guard = LockGuard::None
-                            }
-                            *guard = LockGuard::Write(lock.write().expect("Lock is poisoned. This should never happen."))
-                        }
-                    }
-                }
-                LockGuard::Write(w) => {
-                    match operation {
-                        Operation::Write => {},
-                        Operation::Read => {
-                            {
-                                *guard = LockGuard::None
-                            }
-                            *guard = LockGuard::Read(lock.read().expect("Lock is poisoned. This should never happen."))
-                        }
-                    }
-                }
-            }
-        }
-
-        self
-    }
-
-    pub fn release(&self) -> &Self {
-        for mut guard in &[self.file_guard, self.dir_guard, self.file_meta_guard, self.dir_meta_guard] {
-            *guard = LockGuard::None;
-        }
-
-        self
-    }
-}
 
 impl SqliteDatabase {
-    pub fn new(file_path: &str) -> Result<Self, ConnectionError> {
-        let conn = SqliteConnection::establish(file_path)?;
+    pub fn new(file_path: &str) -> Result<Self, SqliteError> {
+        let conn = match SqliteConnection::establish(file_path) {
+            Ok(c) => c,
+            Err(e) => return Err(ApplicationError(format!("Failed to establish database connection: {:?}", e)))
+        };
 
-        embedded_migrations::run(&conn);
+        match embedded_migrations::run(&conn) {
+            Ok(_) => {},
+            Err(e) => return Err(ApplicationError(format!("Failed to run migrations: {:?}", e)))
+        }
 
-        Ok(SqliteDatabase { conn, locks: SqliteLocks::new() })
+        Ok(SqliteDatabase { conn })
     }
 }
 
@@ -173,12 +56,8 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
         use super::schema::Files::dsl::*;
         use super::schema::Directories::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::File, Operation::Read),
-            (Field::Dir, Operation::Read)
-        ]);
-
-        Ok(Files.inner_join(Directories)
+        Ok(Files.find(f.id)
+            .inner_join(Directories)
             .first::<(File, Directory)>(&self.conn).to_db_err()?
             .1)
     }
@@ -186,26 +65,15 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
     fn file_metadata<B: FromIterator<(String, String)>>(&self, f: &File) -> Result<B, SqliteError> {
         use super::schema::FileMetadata::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::File, Operation::Read),
-            (Field::FileMeta, Operation::Read)
-        ]);
-
         Ok(FileKeyValuePair::belonging_to(f)
             .select((key, value))
             .load::<(String, String)>(&self.conn).to_db_err()?
-            .iter()
-            .map(|x| *x)
+            .into_iter()
             .collect())
     }
 
     fn file_metadata_get(&self, f: &File, k: &str) -> Result<Option<String>, SqliteError> {
         use super::schema::FileMetadata::dsl::*;
-
-        let _ = self.locks.context().lock(&[
-            (Field::File, Operation::Read),
-            (Field::FileMeta, Operation::Read)
-        ]);
 
         FileKeyValuePair::belonging_to(f)
             .filter(key.eq(k))
@@ -217,21 +85,7 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
     fn file_metadata_set(&self, f: &File, k: &str, v: Option<&str>) -> Result<Option<String>, SqliteError> {
         use super::schema::FileMetadata::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::File, Operation::Read),
-            (Field::FileMeta, Operation::Write)
-        ]);
-
-        let existing = FileKeyValuePair::belonging_to(f)
-            .filter(key.eq(k))
-            .select(value)
-            .load::<String>(&self.conn).to_db_err()?;
-
-        let existing = if existing.len() == 0 {
-            None
-        } else {
-            Some(existing[0])
-        };
+        let existing = self.file_metadata_get(f, k)?;
 
         match v {
             None => {
@@ -241,7 +95,7 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
                 ).execute(&self.conn).to_db_err()?;
             },
             Some(s) => {
-                match existing {
+                match &existing {
                     None => {
                         insert_into(FileMetadata)
                             .values(&NewFileKeyValuePair {
@@ -251,7 +105,7 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
                             })
                             .execute(&self.conn).to_db_err()?;
                     }
-                    Some(s2) => {
+                    Some(_s2) => {
                         update(FileMetadata)
                             .filter(key.eq(k))
                             .set(value.eq(s))
@@ -268,11 +122,6 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
         use super::schema::Directories::dsl::*;
         use super::schema::Files::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::File, Operation::Read),
-            (Field::Dir, Operation::Read)
-        ]);
-
         Directories.find(d.id)
             .inner_join(Files)
             .filter(filename.eq(fname))
@@ -285,15 +134,10 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
         use super::schema::Directories::dsl::*;
         use super::schema::Files::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::File, Operation::Read),
-            (Field::Dir, Operation::Read)
-        ]);
-
         let res = Directories.find(d.id)
             .inner_join(Files)
             .load::<(Directory, File)>(&self.conn).to_db_err()?
-            .iter()
+            .into_iter()
             .map(|x| x.1)
             .collect();
 
@@ -305,16 +149,11 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
         use super::schema::Files::dsl::*;
         use super::schema::FileMetadata::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::File, Operation::Read),
-            (Field::Dir, Operation::Read)
-        ]);
-
         let res = Files.inner_join(FileMetadata)
             .filter(key.eq(k))
             .inner_join(Directories)
             .load::<(File, FileKeyValuePair, Directory)>(&self.conn).to_db_err()?
-            .iter()
+            .into_iter()
             .map(|x| x.0)
             .collect();
 
@@ -326,16 +165,11 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
         use super::schema::Files::dsl::*;
         use super::schema::FileMetadata::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::File, Operation::Read),
-            (Field::Dir, Operation::Read)
-        ]);
-
         let res = Files.inner_join(FileMetadata)
             .filter(key.eq(k).and(value.eq(k)))
             .inner_join(Directories)
             .load::<(File, FileKeyValuePair, Directory)>(&self.conn).to_db_err()?
-            .iter()
+            .into_iter()
             .map(|x| x.0)
             .collect();
 
@@ -345,26 +179,15 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
     fn directory_metadata<B: FromIterator<(String, String)>>(&self, d: &Directory) -> Result<B, SqliteError> {
         use super::schema::DirectoryMetadata::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::Dir, Operation::Read),
-            (Field::DirMeta, Operation::Read)
-        ]);
-
         Ok(DirectoryKeyValuePair::belonging_to(d)
             .select((key, value))
             .load::<(String, String)>(&self.conn).to_db_err()?
-            .iter()
-            .map(|x| *x)
+            .into_iter()
             .collect())
     }
 
     fn directory_metadata_get(&self, d: &Directory, k: &str) -> Result<Option<String>, SqliteError> {
         use super::schema::DirectoryMetadata::dsl::*;
-
-        let _ = self.locks.context().lock(&[
-            (Field::Dir, Operation::Read),
-            (Field::DirMeta, Operation::Read)
-        ]);
 
         DirectoryKeyValuePair::belonging_to(d)
             .filter(key.eq(k))
@@ -376,21 +199,7 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
     fn directory_metadata_set(&self, d: &Directory, k: &str, v: Option<&str>) -> Result<Option<String>, SqliteError> {
         use super::schema::DirectoryMetadata::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::Dir, Operation::Read),
-            (Field::DirMeta, Operation::Write)
-            ]);
-
-        let existing = DirectoryKeyValuePair::belonging_to(d)
-            .filter(key.eq(k))
-            .select(value)
-            .load::<String>(&self.conn).to_db_err()?;
-
-        let existing = if existing.len() == 0 {
-            None
-        } else {
-            Some(existing[0])
-        };
+        let existing = self.directory_metadata_get(d, k)?;
 
         match v {
             None => {
@@ -400,7 +209,7 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
                 ).execute(&self.conn).to_db_err()?;
             },
             Some(s) => {
-                match existing {
+                match &existing {
                     None => {
                         insert_into(DirectoryMetadata)
                             .values(&NewDirectoryKeyValuePair {
@@ -410,7 +219,7 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
                             })
                             .execute(&self.conn).to_db_err()?;
                     }
-                    Some(s2) => {
+                    Some(_s2) => {
                         update(DirectoryMetadata)
                             .filter(key.eq(k))
                             .set(value.eq(s))
@@ -426,11 +235,7 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
     fn get_directory(&self, p: &str) -> Result<Option<Directory>, SqliteError> {
         use super::schema::Directories::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::Dir, Operation::Read),
-        ]);
-
-        p = preprocess(p);
+        let p = &preprocess(p);
         
         Directories.filter(path.eq(p).or(path.eq(p.trim_end_matches("/"))))
             .first::<Directory>(&self.conn)
@@ -440,13 +245,8 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
     fn get_directories<B: FromIterator<Directory>>(&self) -> Result<B, SqliteError> {
         use super::schema::Directories::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::Dir, Operation::Read),
-        ]);
-        
         let res = Directories.load::<Directory>(&self.conn).to_db_err()?
-                    .iter()
-                    .map(|x| *x)
+                    .into_iter()
                     .collect();
 
         Ok(res)
@@ -456,16 +256,11 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
         use super::schema::Directories::dsl::*;
         use super::schema::DirectoryMetadata::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::Dir, Operation::Read),
-            (Field::DirMeta, Operation::Read),
-        ]);
-        
         let res = DirectoryMetadata
             .filter(key.eq(k))
             .inner_join(Directories)
             .load::<(DirectoryKeyValuePair, Directory)>(&self.conn).to_db_err()?
-            .iter()
+            .into_iter()
             .map(|x| x.1)
             .collect();
 
@@ -476,16 +271,11 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
         use super::schema::Directories::dsl::*;
         use super::schema::DirectoryMetadata::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::Dir, Operation::Read),
-            (Field::DirMeta, Operation::Read),
-        ]);
-        
         let res = DirectoryMetadata
             .filter(key.eq(k).and(value.eq(v)))
             .inner_join(Directories)
             .load::<(DirectoryKeyValuePair, Directory)>(&self.conn).to_db_err()?
-            .iter()
+            .into_iter()
             .map(|x| x.1)
             .collect();
 
@@ -493,15 +283,9 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
     }
 
     fn get_file(&self, p: &str) -> Result<Option<(File, Directory)>, SqliteError> {
-        use super::schema::Directories::dsl::*;
         use super::schema::Files::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::Dir, Operation::Read),
-            (Field::File, Operation::Read),
-        ]);
-
-        p = preprocess(p);
+        let p = &preprocess(p);
 
         let parent = match parent_dir(p) {
             Some(s) => s,
@@ -510,16 +294,10 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
 
         let fname = super::path::filename(p);
         
-        let dir = match Directories.filter(path.eq(parent))
-                    .inner_join(Files)
-                    .filter(filename.eq(fname))
-                    .first::<(Directory, File)>(&self.conn).optional().to_db_err() {
-                        Err(e) => return Err(e),
-                        Ok(v) => match v {
-                            Some(s) => s.0,
-                            None => return Ok(None)
-                        }
-                    };
+        let dir = match self.get_directory(parent)? {
+            Some(s) => s,
+            None => return Ok(None)
+        };
 
         File::belonging_to(&dir)
             .filter(filename.eq(fname))
@@ -531,14 +309,9 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
 
     fn get_files<B: FromIterator<File>>(&self) -> Result<B, SqliteError> {
         use super::schema::Files::dsl::*;
-
-        let _ = self.locks.context().lock(&[
-            (Field::Dir, Operation::Read),
-        ]);
         
         let res = Files.load::<File>(&self.conn).to_db_err()?
-                    .iter()
-                    .map(|x| *x)
+                    .into_iter()
                     .collect();
 
         Ok(res)
@@ -547,17 +320,12 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
     fn get_files_with_key<B: FromIterator<File>>(&self, k: &str) -> Result<B, SqliteError> {
         use super::schema::Files::dsl::*;
         use super::schema::FileMetadata::dsl::*;
-
-        let _ = self.locks.context().lock(&[
-            (Field::Dir, Operation::Read),
-            (Field::DirMeta, Operation::Read),
-        ]);
         
         let res = FileMetadata
             .filter(key.eq(k))
             .inner_join(Files)
             .load::<(FileKeyValuePair, File)>(&self.conn).to_db_err()?
-            .iter()
+            .into_iter()
             .map(|x| x.1)
             .collect();
 
@@ -568,17 +336,12 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
         use super::schema::Files::dsl::*;
         use super::schema::FileMetadata::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::File, Operation::Read),
-            (Field::FileMeta, Operation::Read),
-        ]);
-        
         let res = FileMetadata
             .filter(key.eq(k).and(value.eq(v)))
             .inner_join(Files)
             .load::<(FileKeyValuePair, File)>(&self.conn).to_db_err()?
             .iter()
-            .map(|x| x.1)
+            .map(|x| x.1.clone())
             .collect();
 
         Ok(res)
@@ -587,11 +350,7 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
     fn add_directory(&self, p: &str) -> Result<(Directory, bool), SqliteError> {
         use super::schema::Directories::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::Dir, Operation::Write),
-        ]);
-
-        p = preprocess(p);
+        let p = &preprocess(p);
 
         let res = insert_into(Directories)
             .values(NewDirectory {
@@ -619,44 +378,61 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
         }
 
         return Ok((dir, true));
-
     }
 
-    fn add_file(&self, p: &str) -> Result<(File, bool), SqliteError> {
+    fn add_directories<'b, I: Iterator<Item=&'b str>>(&self, paths: I) -> Result<usize, SqliteError> {
+        use super::schema::Directories::dsl::*;
+
+        let mut pat_cache = Vec::<String>::new();
+        let mut pat_refs = Vec::<&str>::new();
+
+        for p in paths {
+            pat_cache.push(preprocess(p));
+        }
+
+        for p in &pat_cache {
+            pat_refs.push(p);
+
+            while let Some(p) = parent_dir(p) {
+                pat_refs.push(p);
+            }
+        }
+
+        let newDirs = pat_refs.into_iter().map(|p| NewDirectory {
+                path: p
+            }).collect::<Vec<NewDirectory>>();
+
+        let res = insert_or_ignore_into(Directories)
+            .values(newDirs)
+            .execute(&self.conn).to_db_err()?;
+
+        return Ok(res);
+    }
+
+    fn add_file(&self, p: &str, h: &[u8]) -> Result<(File, bool), SqliteError> {
         use super::schema::Files::dsl::*;
 
-        let _ = self.locks.context().lock(&[
-            (Field::Dir, Operation::Write),
-        ]);
+        let p = &preprocess(p);
 
-        p = preprocess(p);
+        let parent = match parent_dir(p) {
+            Some(s) => s,
+            None => return Err(ApplicationError("The path does not have a parent directory ('{}' was given).".to_owned()))
+        };
 
-        let res = insert_into(Files)
+        let (dir, _) = self.add_directory(parent)?;
+
+        let res = insert_or_ignore_into(Files)
             .values(NewFile {
-                filename: p
+                directory_id: dir.id,
+                filename: super::path::filename(p),
+                hash: h
             })
             .execute(&self.conn).to_db_err()?;
 
         let file = Files.filter(filename.eq(p))
             .first::<File>(&self.conn).to_db_err()?;
 
-        if res == 0 {
-            return Ok((dir, false));
-        }
-
-        while let Some(p) = parent_dir(p) {
-            let res = insert_into(Directories)
-                .values(NewDirectory {
-                    path: p
-                })
-                .execute(&self.conn).to_db_err()?;
-            
-            if res == 0 {
-                break;
-            }
-        }
-
-        return Ok((dir, true));
+        return Ok((file, res > 0));
     }
 
 }
