@@ -1,5 +1,4 @@
 use super::schema::*;
-use super::path::parent_dir;
 
 /*
     notes to future self:

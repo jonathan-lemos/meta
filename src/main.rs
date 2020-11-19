@@ -8,6 +8,7 @@ extern crate diesel;
 
 mod database;
 mod functional;
+mod linq;
 
 fn main() {
     println!("Hello, world!");

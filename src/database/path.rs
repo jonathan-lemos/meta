@@ -1,82 +1,125 @@
-pub fn parent_dir(path: &str) -> Option<&str> {
-    let mut count = 0;
-    let mut it = path.chars().rev();
+use std::ops::{Add, AddAssign, Div, DivAssign};
+use std::cmp::max;
 
-    match it.next() {
-        Some(_c) => {
-            count += 1;
-        }
-        None => return None
-    }
-
-    for c in it {
-        if c == '/' {
-            return Some(&path[..path.len() - count]);
-        }
-        count += 1
-    }
-
-    None
+#[derive(Debug, Eq, PartialEq, Hash, Clone, PartialOrd, Ord)]
+pub struct Path {
+    pat: String
 }
 
-#[test]
-fn test_parent_dir() {
-    assert_eq!(parent_dir("/foo/bar"), Some("/foo"));
-    assert_eq!(parent_dir("/foo/bar/"), Some("/foo"));
-    assert_eq!(parent_dir("/f/b"), Some("/f"));
-    assert_eq!(parent_dir("/f/b/"), Some("/f"));
-    assert_eq!(parent_dir("/foo/"), Some("/"));
-    assert_eq!(parent_dir("/foo"), Some("/"));
-    assert_eq!(parent_dir("/f/"), Some("/"));
-    assert_eq!(parent_dir("/f"), Some("/"));
-    assert_eq!(parent_dir("/"), None);
-    assert_eq!(parent_dir(""), None);
-}
+impl Path {
+    pub fn new(s: &str) -> Self {
+        let s = s.trim_end_matches("/");
+        let s = s.trim_start_matches("//");
 
-pub fn filename(path: &str) -> &str {
-    let mut count = 0;
-    let mut it = path.chars().rev();
-
-    match it.next() {
-        Some(_c) => {
-            count += 1;
+        let st = if !s.starts_with("/") {
+            let mut tmp = "/".to_owned();
+            tmp += s;
+            tmp
         }
-        None => return ""
+        else {
+            s.to_owned()
+        };
+
+        Path { pat: st }
     }
 
-    for c in it {
-        if c == '/' {
-            return &path[path.len() - count..];
+    pub fn str(&self) -> &str {
+        &self.pat
+    }
+
+    pub fn filename(&self) -> &str {
+        &self.pat[self.pat.trim_end_matches(|c| c != '/').trim_end_matches('/').len()..]
+    }
+
+    pub fn parent(&self) -> &str {
+        let r = self.pat.trim_end_matches(|c| c != '/').trim_end_matches('/');
+
+        if r.len() > 0 {
+            r
         }
-        count += 1
+        else {
+            "/"
+        }
     }
 
-    path
-}
-
-#[test]
-fn test_filename() {
-    assert_eq!(filename("/foo/bar"), "bar");
-    assert_eq!(filename("/foo/bar/"), "");
-    assert_eq!(filename("/f/b"), "b");
-    assert_eq!(filename("/f/b/"), "");
-    assert_eq!(filename("/foo/"), "");
-    assert_eq!(filename("/foo"), "foo");
-    assert_eq!(filename("/f/"), "");
-    assert_eq!(filename("/f"), "f");
-    assert_eq!(filename("/"), "");
-    assert_eq!(filename(""), "");
-}
-
-pub fn preprocess(p: &str) -> String {
-    let p = p.trim_end_matches("/");
-    let p = p.trim_start_matches("//");
-    if !p.starts_with("/") {
-        let mut tmp = "/".to_owned();
-        tmp += p;
-        tmp
+    pub fn pop(&mut self) -> &str {
+        let f = self.filename();
+        self.pat.truncate(self.pat.trim_end_matches(|c| c != '/').trim_end_matches('/').len());
+        f
     }
-    else {
-        p.to_owned()
+}
+
+impl Add<&str> for Path {
+    type Output = Path;
+
+    fn add(self, rhs: &str) -> Self {
+        let n = self.pat + rhs;
+        n.truncate(n.trim_end_matches("/").len());
+
+        Self {
+            pat: n
+        }
+    }
+}
+
+impl AddAssign<&str> for Path {
+    fn add_assign(&mut self, rhs: &str) {
+        self.pat += rhs;
+        self.pat.truncate(self.pat.trim_end_matches("/").len());
+    }
+}
+
+impl Div<&str> for Path {
+    type Output = Path;
+
+    fn div(self, rhs: &str) -> Self {
+        let n = self.pat + "/" + rhs;
+        n.truncate(n.trim_end_matches("/").len());
+
+        Self {
+            pat: n
+        }
+    }
+}
+
+impl DivAssign<&str> for Path {
+    fn div_assign(&mut self, rhs: &str) {
+        self.pat += "/";
+        self.pat += rhs;
+        self.pat.truncate(self.pat.trim_end_matches("/").len());
+    }
+}
+
+mod PathTests {
+    use super::Path;
+
+    #[test]
+    fn test_filename() {
+        let cases = [
+            ("/foo", "foo"),
+            ("/foo/bar", "bar"),
+            ("/", "")
+        ];
+
+        let paths = cases.iter().map(|x| Path::new(x.0)).collect::<Vec<Path>>();
+
+        for (path, exp) in paths.iter().zip(cases.iter().map(|x| x.1)) {
+            assert_eq!(path.filename(), exp);
+        }
+    }
+
+    #[test]
+    fn test_pop() {
+        let cases = [
+            ("/foo", "/"),
+            ("/foo/bar", "/foo"),
+            ("/", "/")
+        ];
+
+        let paths = cases.iter().map(|x| Path::new(x.0)).collect::<Vec<Path>>();
+
+        for (path, exp) in paths.iter().zip(cases.iter().map(|x| x.1)) {
+            assert_eq!(path.parent(), exp);
+        }
     }
 }
