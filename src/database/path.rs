@@ -46,8 +46,8 @@ impl Path {
         Self::parent_str(&self.pat)
     }
 
-    pub fn pop(&mut self) -> &str {
-        let f = self.filename();
+    pub fn pop(&mut self) -> String {
+        let f = self.filename().to_owned();
         self.pat.truncate(self.pat.trim_end_matches(|c| c != '/').trim_end_matches('/').len());
         f
     }
@@ -57,7 +57,7 @@ impl Add<&str> for Path {
     type Output = Path;
 
     fn add(self, rhs: &str) -> Self {
-        let n = self.pat + rhs;
+        let mut n = self.pat + rhs;
         n.truncate(n.trim_end_matches("/").len());
 
         Self {
@@ -77,7 +77,7 @@ impl Div<&str> for Path {
     type Output = Path;
 
     fn div(self, rhs: &str) -> Self {
-        let n = self.pat + "/" + rhs;
+        let mut n = self.pat + "/" + rhs;
         n.truncate(n.trim_end_matches("/").len());
 
         Self {

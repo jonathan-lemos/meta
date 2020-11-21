@@ -14,10 +14,12 @@ pub trait Database<'a, E> {
     fn entry_metadata<B: FromIterator<(String, String)>>(&self, entry: &Entry) -> Result<B, E>;
     fn entry_metadata_get(&self, entry: &Entry, key: &str) -> Result<Option<String>, E>;
     fn entry_metadata_set(&self, entry: &Entry, key: &str, value: Option<&str>) -> Result<Option<String>, E>;
+    fn entry_metadata_clear(&self, entry: &Entry) -> Result<usize, E>;
 
     fn entries_metadata<'b, B: FromIterator<(Entry, Vec<(String, String)>)>, I: Iterator<Item=&'b Entry>>(&self, entries: I) -> Result<B, E>;
     fn entries_metadata_get<'b, B: FromIterator<(Entry, String)>, I: Iterator<Item=&'b Entry>>(&self, entries: I, key: &str) -> Result<B, E>;
     fn entries_metadata_set<'b, B: FromIterator<(Entry, Option<String>)>, I: Iterator<Item=&'b Entry>>(&self, entries: I, key: &str, value: Option<&str>) -> Result<B, E>;
+    fn entries_metadata_clear<'b, I: Iterator<Item=&'b Entry>>(&self, entries: I) -> Result<usize, E>;
 
     fn directory_entry(&self, d: &Directory, filename: &str) -> Result<Option<Entry>, E>;
     fn directory_entries<B: FromIterator<Entry>>(&self, d: &Directory) -> Result<B, E>;

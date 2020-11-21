@@ -20,9 +20,6 @@ pub struct NewDirectory<'a> {
 }
 
 impl Directory {
-    pub fn parent_path(&self) -> Option<&str> {
-        parent_dir(&self.path)
-    }
 }
 
 #[derive(Identifiable, Queryable, PartialEq, Associations, Debug, Clone)]

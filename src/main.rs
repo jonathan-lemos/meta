@@ -7,6 +7,7 @@ extern crate diesel_migrations;
 extern crate diesel;
 
 mod database;
+mod format;
 mod functional;
 mod linq;
 
