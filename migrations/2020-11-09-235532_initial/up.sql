@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS Files (
     FOREIGN KEY (directory_id) REFERENCES Directories(id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
+CREATE INDEX idx_dir_path ON Directories(path);
+CREATE INDEX idx_file_name ON Directories(filename);
 CREATE INDEX idx_files_hash ON Files(hash);
 
 CREATE TABLE IF NOT EXISTS DirectoryMetadata (
@@ -31,4 +33,6 @@ CREATE TABLE IF NOT EXISTS FileMetadata (
     UNIQUE(file_id, key),
     FOREIGN KEY (file_id) REFERENCES Files(id) ON DELETE CASCADE ON UPDATE CASCADE
 );
+
+INSERT INTO Directories(path) VALUES ("/");
 

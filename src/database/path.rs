@@ -31,8 +31,8 @@ impl Path {
         &self.pat[self.pat.trim_end_matches(|c| c != '/').trim_end_matches('/').len()..]
     }
 
-    pub fn parent(&self) -> &str {
-        let r = self.pat.trim_end_matches(|c| c != '/').trim_end_matches('/');
+    pub fn parent_str(s: &str) -> &str {
+        let r = s.trim_end_matches(|c| c != '/').trim_end_matches('/');
 
         if r.len() > 0 {
             r
@@ -40,6 +40,10 @@ impl Path {
         else {
             "/"
         }
+    }
+
+    pub fn parent(&self) -> &str {
+        Self::parent_str(&self.pat)
     }
 
     pub fn pop(&mut self) -> &str {

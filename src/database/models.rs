@@ -44,12 +44,6 @@ pub struct NewFile<'a> {
     pub hash: &'a [u8]
 }
 
-impl File {
-    pub fn parent_path(&self) -> Option<&str> {
-        parent_dir(&self.filename)
-    }
-}
-
 #[derive(Identifiable, Queryable, PartialEq, Associations, Debug, Clone)]
 #[belongs_to(File)]
 #[table_name = "FileMetadata"]

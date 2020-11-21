@@ -1,16 +1,18 @@
 use std::collections::BTreeMap;
 use super::models::*;
-use super::database::Database;
+use super::database::{Database, Entry};
 use super::path::Path;
 use super::option_result::OptionResult;
 
 use std::sync::{RwLock, Mutex, RwLockReadGuard, RwLockWriteGuard};
-use std::iter::FromIterator;
+use std::iter::{Chain, FromIterator};
+use std::collections::{HashMap, HashSet};
 use diesel::{insert_into, insert_or_ignore_into, update, delete};
 use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
 
 use crate::database::sqlite::SqliteError::*;
+use crate::linq::collectors::Collect;
 
 embed_migrations!();
 
@@ -28,6 +30,21 @@ impl<T> ToSqlite<T> for diesel::result::QueryResult<T> {
         match self {
             Ok(t) => Ok(t),
             Err(e) => Err(DbError(e))
+        }
+    }
+}
+
+impl From<diesel::result::Error> for SqliteError {
+    fn from(d: diesel::result::Error) -> SqliteError {
+        DbError(d)
+    }
+}
+
+impl From<SqliteError> for diesel::result::Error {
+    fn from(s: SqliteError) -> diesel::result::Error {
+        match s {
+            SqliteError::DbError(d) => d,
+            ApplicationError(_) => diesel::result::Error::NotFound
         }
     }
 }
@@ -63,384 +80,430 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
             .1)
     }
 
-    fn file_metadata<B: FromIterator<(String, String)>>(&self, f: &File) -> Result<B, SqliteError> {
-        use super::schema::FileMetadata::dsl::*;
+    fn entry_metadata<B: FromIterator<(String, String)>>(&self, entry: &Entry) -> Result<B, SqliteError> {
+        match entry {
+            Entry::File(f) => {
+                use super::schema::FileMetadata::dsl::*;
 
-        Ok(FileKeyValuePair::belonging_to(f)
-            .select((key, value))
-            .load::<(String, String)>(&self.conn).to_db_err()?
-            .into_iter()
-            .collect())
+                Ok(FileKeyValuePair::belonging_to(f)
+                    .select((key, value))
+                    .load::<(String, String)>(&self.conn).to_db_err()?
+                    .into_iter()
+                    .collect())
+            }
+            Entry::Directory(d) => {
+                use super::schema::DirectoryMetadata::dsl::*;
+
+                Ok(DirectoryKeyValuePair::belonging_to(d)
+                    .select((key, value))
+                    .load::<(String, String)>(&self.conn).to_db_err()?
+                    .into_iter()
+                    .collect())
+            }
+        }
     }
 
-    fn file_metadata_get(&self, f: &File, k: &str) -> Result<Option<String>, SqliteError> {
-        use super::schema::FileMetadata::dsl::*;
+    fn entry_metadata_get(&self, entry: &Entry, k: &str) -> Result<Option<String>, SqliteError> {
+        match entry {
+            Entry::File(f) => {
+                use super::schema::FileMetadata::dsl::*;
 
-        FileKeyValuePair::belonging_to(f)
-            .filter(key.eq(k))
-            .select(value)
-            .first::<String>(&self.conn)
-            .optional().to_db_err()
+                FileKeyValuePair::belonging_to(f)
+                    .filter(key.eq(k))
+                    .select(value)
+                    .first::<String>(&self.conn)
+                    .optional().to_db_err()
+            }
+            Entry::Directory(d) => {
+                use super::schema::DirectoryMetadata::dsl::*;
+
+                DirectoryKeyValuePair::belonging_to(d)
+                    .filter(key.eq(k))
+                    .select(value)
+                    .first::<String>(&self.conn)
+                    .optional().to_db_err()
+            }
+        }
     }
 
-    fn file_metadata_set(&self, f: &File, k: &str, v: Option<&str>) -> Result<Option<String>, SqliteError> {
-        use super::schema::FileMetadata::dsl::*;
-
-        let existing = self.file_metadata_get(f, k)?;
+    fn entry_metadata_set(&self, entry: &Entry, k: &str, v: Option<&str>) -> Result<Option<String>, SqliteError> {
+        let existing = self.entry_metadata_get(entry, k)?;
 
         match v {
             None => {
-                delete(
-                    FileKeyValuePair::belonging_to(f)
-                    .filter(key.eq(k))
-                ).execute(&self.conn).to_db_err()?;
+                match entry {
+                    Entry::File(f) => {
+                        use super::schema::FileMetadata::dsl::*;
+
+                        delete(
+                            FileKeyValuePair::belonging_to(f)
+                            .filter(key.eq(k))
+                        ).execute(&self.conn).to_db_err()?;
+                    }
+                    Entry::Directory(d) => {
+                        use super::schema::DirectoryMetadata::dsl::*;
+
+                        delete(
+                            DirectoryKeyValuePair::belonging_to(d)
+                            .filter(key.eq(k))
+                        ).execute(&self.conn).to_db_err()?;
+                    }
+                }
             },
-            Some(s) => {
+            Some(val) => {
                 match &existing {
                     None => {
-                        insert_into(FileMetadata)
-                            .values(&NewFileKeyValuePair {
-                                file_id: f.id,
-                                key: k,
-                                value: s
-                            })
-                            .execute(&self.conn).to_db_err()?;
+                        match entry {
+                            Entry::File(f) => {
+                                use super::schema::FileMetadata::dsl::*;
+
+                                insert_into(FileMetadata)
+                                    .values(&NewFileKeyValuePair {
+                                        file_id: f.id,
+                                        key: k,
+                                        value: val
+                                    })
+                                    .execute(&self.conn).to_db_err()?;
+                            }
+                            Entry::Directory(d) => {
+                                use super::schema::DirectoryMetadata::dsl::*;
+
+                                insert_into(DirectoryMetadata)
+                                    .values(&NewDirectoryKeyValuePair {
+                                        directory_id: d.id,
+                                        key: k,
+                                        value: val
+                                    })
+                                    .execute(&self.conn).to_db_err()?;
+                            }
+                        }
                     }
                     Some(_s2) => {
-                        update(FileMetadata)
-                            .filter(key.eq(k))
-                            .set(value.eq(s))
-                            .execute(&self.conn).to_db_err()?;
+                        match entry {
+                            Entry::File(f) => {
+                                use super::schema::FileMetadata::dsl::*;
+
+                                update(FileMetadata)
+                                    .filter(key.eq(k))
+                                    .set(value.eq(val))
+                                    .execute(&self.conn).to_db_err()?;
+                            },
+                            Entry::Directory(f) => {
+                                use super::schema::DirectoryMetadata::dsl::*;
+
+                                update(DirectoryMetadata)
+                                    .filter(key.eq(k))
+                                    .set(value.eq(val))
+                                    .execute(&self.conn).to_db_err()?;
+                            }
+                        }
                     }
-                }                
+                }
             }
         }
 
         Ok(existing)
     }
 
-    fn files_metadata<'b, B: FromIterator<(File, BTreeMap<String, String>)>, I: Iterator<Item=&'b File>>(&self, files: I) -> Result<B, E> {
-        let f = files.map(|x| x.clone()).collect::<Vec<File>>();
+    fn entries_metadata<'b, B: FromIterator<(Entry, Vec<(String, String)>)>, I: Iterator<Item=&'b Entry>>(&self, entries: I) -> Result<B, SqliteError> {
+        let mut f = Vec::<File>::new();
+        let mut d = Vec::<Directory>::new();
 
-        let res = FileKeyValuePair::belonging_to(&f)
+        for e in entries {
+            match e {
+                Entry::File(file) => f.push(file.clone()),
+                Entry::Directory(dir) => d.push(dir.clone())
+            }
+        };
+
+        let fres = FileKeyValuePair::belonging_to(&f)
             .load::<FileKeyValuePair>(&self.conn).to_db_err()?
-            .grouped_by(&f);
+            .grouped_by(&f)
+            .into_iter()
+            .zip(&f);
 
-        let it = res.into_iter()
-            .zip(f)
-            .map(|x| (
-                x.1,
-                x.0.into_iter()
-                    .map(|y| (y.key, y.value))
-                        .collect::<BTreeMap<String, String>>()))
-            .collect();
+        let dres = DirectoryKeyValuePair::belonging_to(&d)
+            .load::<DirectoryKeyValuePair>(&self.conn).to_db_err()?
+            .grouped_by(&d)
+            .into_iter()
+            .zip(&d);
 
-        Ok(it)
+        return Ok(
+            fres.into_iter().map(|x| (Entry::File(*x.1), x.0.into_iter().map(|x| (x.key, x.value)).collect()))
+            .chain(
+                dres.into_iter().map(|x| (Entry::Directory(*x.1), x.0.into_iter().map(|x| (x.key, x.value)).collect()))
+            )
+            .collect()
+        )
     }
 
-    fn files_metadata_get<'b, B: FromIterator<(File, Option<String>)>, I: Iterator<Item=&'b File>>(&self, files: I, k: &str) -> Result<B, SqliteError> {
-        use super::schema::Files::dsl::*;
-        use super::schema::FileMetadata::dsl::*;
+    fn entries_metadata_get<'b, B: FromIterator<(Entry, String)>, I: Iterator<Item=&'b Entry>>(&self, entries: I, k: &str) -> Result<B, SqliteError> {
+        let mut f = Vec::<File>::new();
+        let mut d = Vec::<Directory>::new();
 
-        let f = files.map(|x| x.clone()).collect::<Vec<File>>();
-        f.sort_unstable_by_key(|f| f.id);
+        for e in entries {
+            match e {
+                Entry::File(file) => f.push(file.clone()),
+                Entry::Directory(dir) => d.push(dir.clone())
+            }
+        };
 
-        let ids = f.iter().map(|x| x.id).collect::<Vec<i32>>();
+        let fres = FileKeyValuePair::belonging_to(&f)
+            .filter(super::schema::FileMetadata::dsl::key.eq(k))
+            .load::<FileKeyValuePair>(&self.conn).to_db_err()?
+            .grouped_by(&f)
+            .into_iter()
+            .zip(&f);
 
-        let res = Files.left_join(FileMetadata)
-            .filter(super::schema::Files::dsl::id.eq_any(ids))
-            .filter(key.eq(k))
-            .load::<(File, Option<FileKeyValuePair>)>(&self.conn).to_db_err()?;
+        let dres = DirectoryKeyValuePair::belonging_to(&d)
+            .filter(super::schema::DirectoryMetadata::dsl::key.eq(k))
+            .load::<DirectoryKeyValuePair>(&self.conn).to_db_err()?
+            .grouped_by(&d)
+            .into_iter()
+            .zip(&d);
 
-        Ok(res.into_iter()
-            .map(|x| (x.0, x.1.map(|y| y.value)))
-            .collect())
+        return Ok(
+            fres.into_iter()
+                .map(|x| 
+                    (Entry::File(*x.1), x.0.into_iter().next().map(|y| y.value)))
+            .chain(
+                dres.into_iter()
+                    .map(|x|
+                        (Entry::Directory(*x.1), x.0.into_iter().next().map(|y| y.value)))
+            )
+            .filter(|x| x.1.is_some())
+            .map(|x| (x.0, x.1.unwrap()))
+            .collect()
+        )
     }
 
-    fn files_metadata_set<'b, I: Iterator<Item=&'b File>>(&self, files: I, k: &str, v: &str) -> Result<usize, SqliteError> {
-        use super::schema::FileMetadata::dsl::*;
-
+    fn entries_metadata_set<'b, B: FromIterator<(Entry, Option<String>)>, I: Iterator<Item=&'b Entry>>(&self, entries: I, k: &str, v: Option<&str>) -> Result<B, SqliteError> {
         self.conn.immediate_transaction(|| {
-            let mut num = 0usize;
+            let ret = Vec::<(Entry, Option<String>)>::new();
 
-            for file in files {
-                let res = update(FileMetadata)
-                    .filter(file_id.eq(file.id))
-                    .set(value.eq(v))
-                    .execute(&self.conn)?;
-
-                num += res;
+            for entry in entries {
+                ret.push((*entry, self.entry_metadata_set(entry, k, v)?));
             }
 
-            Ok(num)
+            Ok(ret.into_iter().collect())
         }).to_db_err()
     }
 
-    fn files_with_key<'b, B: FromIterator<File>, I: Iterator<Item=&'b File>>(&self, files: I, k: &str) -> Result<B, SqliteError> {
-        use super::schema::FileMetadata::dsl::*;
-
-        let files = files.map(|x| x.clone()).collect::<Vec<File>>();
-        files.sort_unstable_by_key(|x| x.id);
-
-        let res = FileKeyValuePair::belonging_to(&files)
-            .filter(key.eq(k))
-            .load::<FileKeyValuePair>(&self.conn).to_db_err()?
-            .grouped_by(&files);
-
-        let it = res.into_iter()
-            .zip(&files)
-            .filter(|x| x.0.len() > 0)
-            .map(|x| x.1)
-            .collect();
-    }
-
-    fn files_with_key_and_value<'b, B: FromIterator<File>, I: Iterator<Item=&'b File>>(&self, files: I, k: &str, v: &str) -> Result<B, SqliteError> {
-        use super::schema::FileMetadata::dsl::*;
-
-        let files = files.map(|x| x.clone()).collect::<Vec<File>>();
-        files.sort_unstable_by_key(|x| x.id);
-
-        let res = FileKeyValuePair::belonging_to(&files)
-            .filter(key.eq(k).and(value.eq(v)))
-            .load::<FileKeyValuePair>(&self.conn).to_db_err()?
-            .grouped_by(&files);
-
-        let it = res.into_iter()
-            .zip(&files)
-            .filter(|x| x.0.len() > 0)
-            .map(|x| x.1)
-            .collect();
-    }
-
-    fn directory_file(&self, d: &Directory, fname: &str) -> Result<Option<File>, SqliteError> {
+    fn directory_entry(&self, d: &Directory, fname: &str) -> Result<Option<Entry>, SqliteError> {
         use super::schema::Directories::dsl::*;
         use super::schema::Files::dsl::*;
 
-        Directories.find(d.id)
-            .inner_join(Files)
-            .filter(filename.eq(fname))
-            .first::<(Directory, File)>(&self.conn)
-            .map(|x| x.1)
-            .optional().to_db_err()
-    }
-
-    fn directory_subdir(&self, d: &Directory, filename: &str) -> Result<Option<Directory>, SqliteError> {
-        use super::schema::Directories::dsl::*;
+        let r1 = Directories.find(d.id)
+                    .inner_join(Files)
+                    .filter(filename.eq(fname))
+                    .first::<(Directory, File)>(&self.conn)
+                    .map(|x| x.1)
+                    .optional().to_db_err()?;
         
-        let d = Path::new(&d.path) / filename;
+        if let Some(r) = r1 {
+            return Ok(Some(Entry::File(r)))
+        }
 
-        Directories.filter(path.eq(d.str()))
+        let target = Path::new(&d.path) / fname;
+
+        Ok(Directories.filter(path.eq(target.str()))
             .first::<Directory>(&self.conn)
-            .optional().to_db_err()
+            .optional()
+            .to_db_err()?
+            .map(|x| Entry::Directory(x)))
     }
 
-    fn directory_entries<F: FromIterator<File>, D: FromIterator<Directory>>(&self, d: &Directory) -> Result<(F, D), SqliteError> {
+    fn directory_entries<B: FromIterator<Entry>>(&self, d: &Directory) -> Result<B, SqliteError> {
         use super::schema::Directories::dsl::*;
         use super::schema::Files::dsl::*;
 
-        let f = F
+        let dirs = Directories.filter(path.like(&(d.path + "%")))
+                    .load::<Directory>(&self.conn).to_db_err()?;
+
+        let ids = dirs.iter().map(|x| x.id).into_vec();
+
+        let files = Files.filter(directory_id.eq_any(ids))
+                    .load::<File>(&self.conn).to_db_err()?;
+
+        Ok (
+            dirs.into_iter()
+                .map(Entry::Directory)
+            .chain(files.into_iter()
+                    .map(Entry::File)
+            ).collect()
+        )
     }
 
+    fn directory_entries_with_key<'b, B: FromIterator<Entry>>(&self, d: &Directory, k: &str) -> Result<B, SqliteError> {
+        use super::schema::Directories::dsl::*;
+        use super::schema::Files::dsl::*;
+        use super::schema::FileMetadata;
+        use super::schema::DirectoryMetadata;
 
-    fn directory_metadata<B: FromIterator<(String, String)>>(&self, d: &Directory) -> Result<B, SqliteError> {
-        use super::schema::DirectoryMetadata::dsl::*;
+        let dirs = Directories.filter(path.like(&(d.path + "%")))
+                    .inner_join(DirectoryMetadata::table)
+                    .filter(DirectoryMetadata::key.eq(k))
+                    .load::<(Directory, DirectoryKeyValuePair)>(&self.conn).to_db_err()?
+                    .into_iter()
+                    .map(|x| x.0)
+                    .into_vec();
 
-        Ok(DirectoryKeyValuePair::belonging_to(d)
-            .select((key, value))
-            .load::<(String, String)>(&self.conn).to_db_err()?
-            .into_iter()
-            .collect())
+        let ids = dirs.iter().map(|x| x.id).into_vec();
+
+        let files = Files.filter(directory_id.eq_any(ids))
+                     .inner_join(FileMetadata::table)
+                     .filter(FileMetadata::key.eq(k))
+                     .load::<(File, FileKeyValuePair)>(&self.conn).to_db_err()?
+                     .into_iter()
+                     .map(|x| x.0)
+                     .into_vec();
+
+        Ok (
+            dirs.into_iter()
+                .map(Entry::Directory)
+            .chain(files.into_iter()
+                    .map(Entry::File)
+            ).collect()
+        )
     }
 
-    fn directory_metadata_get(&self, d: &Directory, k: &str) -> Result<Option<String>, SqliteError> {
-        use super::schema::DirectoryMetadata::dsl::*;
+    fn directory_entries_with_key_and_value<'b, B: FromIterator<Entry>>(&self, d: &Directory, k: &str, v: &str) -> Result<B, SqliteError> {
+        use super::schema::Directories::dsl::*;
+        use super::schema::Files::dsl::*;
+        use super::schema::FileMetadata;
+        use super::schema::DirectoryMetadata;
 
-        DirectoryKeyValuePair::belonging_to(d)
-            .filter(key.eq(k))
-            .select(value)
-            .first::<String>(&self.conn)
-            .optional().to_db_err()
+        let dirs = Directories.filter(path.like(&(d.path + "%")))
+                    .inner_join(DirectoryMetadata::table)
+                    .filter(DirectoryMetadata::key.eq(k).and(DirectoryMetadata::value.eq(v)))
+                    .load::<(Directory, DirectoryKeyValuePair)>(&self.conn).to_db_err()?
+                    .into_iter()
+                    .map(|x| x.0)
+                    .into_vec();
+
+        let ids = dirs.iter().map(|x| x.id).into_vec();
+
+        let files = Files.filter(directory_id.eq_any(ids))
+                     .inner_join(FileMetadata::table)
+                     .filter(FileMetadata::key.eq(k).and(FileMetadata::value.eq(v)))
+                     .load::<(File, FileKeyValuePair)>(&self.conn).to_db_err()?
+                     .into_iter()
+                     .map(|x| x.0)
+                     .into_vec();
+
+        Ok (
+            dirs.into_iter()
+                .map(Entry::Directory)
+            .chain(files.into_iter()
+                    .map(Entry::File)
+            ).collect()
+        )
     }
 
-    fn directory_metadata_set(&self, d: &Directory, k: &str, v: Option<&str>) -> Result<Option<String>, SqliteError> {
-        use super::schema::DirectoryMetadata::dsl::*;
+    fn get_entry(&self, p: &str) -> Result<Option<Entry>, SqliteError> {
+        use super::schema::Directories::dsl::*;
+        use super::schema::Files::dsl::*;
+        
+        let pat = Path::new(p);
+        
+        let d = Directories.filter(path.eq(pat.str()))
+                    .first::<Directory>(&self.conn)
+                    .optional()
+                    .to_db_err()?;
 
-        let existing = self.directory_metadata_get(d, k)?;
+        if let Some(d) = d {
+            return Ok(Some(Entry::Directory(d)));
+        }
 
-        match v {
-            None => {
-                delete(
-                    DirectoryKeyValuePair::belonging_to(d)
-                    .filter(key.eq(k))
-                ).execute(&self.conn).to_db_err()?;
-            },
-            Some(s) => {
-                match &existing {
-                    None => {
-                        insert_into(DirectoryMetadata)
-                            .values(&NewDirectoryKeyValuePair {
-                                directory_id: d.id,
-                                key: k,
-                                value: s
-                            })
-                            .execute(&self.conn).to_db_err()?;
-                    }
-                    Some(_s2) => {
-                        update(DirectoryMetadata)
-                            .filter(key.eq(k))
-                            .set(value.eq(s))
-                            .execute(&self.conn).to_db_err()?;
-                    }
-                }                
+        let (par, fnam) = (pat.parent(), pat.filename());
+
+        Ok(Directories.filter(path.eq(par))
+            .inner_join(Files)
+            .filter(filename.eq(fnam))
+            .first::<(Directory, File)>(&self.conn)
+            .optional()
+            .to_db_err()?
+            .map(|x| Entry::File(x.1)))
+    }
+
+    fn get_entries<'b, B: FromIterator<Entry>, I: Iterator<Item=&'b str>>(&self, paths: I) -> Result<B, SqliteError> {
+        use super::schema::Directories::dsl::*;
+        use super::schema::Files::dsl::*;
+
+        let pstrs = paths.into_vec();
+        let parents = pstrs.iter().map(|x| Path::new(x).parent()).into_vec();
+        let filenames = pstrs.iter().map(|x| Path::new(x).filename()).into_vec();
+        let mut filename_parent_map = HashMap::<String, HashSet<String>>::new();
+
+        for (f, d) in filenames.iter().zip(parents) {
+            if let Some(set) = filename_parent_map.get_mut(f.to_owned()) {
+                set.insert(d.to_owned());
+            }
+            else {
+                let set = HashSet::new();
+                set.insert(d.to_owned());
+                filename_parent_map.insert((*f).to_owned(), set);
             }
         }
 
-        Ok(existing)
-    }
+        let dirs = Directories.filter(path.eq_any(pstrs))
+                    .load::<Directory>(&self.conn).to_db_err()?;
 
-    fn get_directory(&self, p: &str) -> Result<Option<Directory>, SqliteError> {
-        use super::schema::Directories::dsl::*;
-
-        let p = &preprocess(p);
-        
-        Directories.filter(path.eq(p).or(path.eq(p.trim_end_matches("/"))))
-            .first::<Directory>(&self.conn)
-            .optional().to_db_err()
-    }
-
-    fn get_directories<B: FromIterator<Directory>>(&self) -> Result<B, SqliteError> {
-        use super::schema::Directories::dsl::*;
-
-        let res = Directories.load::<Directory>(&self.conn).to_db_err()?
+        let files = Directories.filter(path.eq_any(parents))
+                    .inner_join(Files)
+                    .filter(filename.eq_any(filenames))
+                    .load::<(Directory, File)>(&self.conn).to_db_err()?
                     .into_iter()
-                    .collect();
-
-        Ok(res)
-    }
-
-    fn get_directories_with_key<B: FromIterator<Directory>>(&self, k: &str) -> Result<B, SqliteError> {
-        use super::schema::Directories::dsl::*;
-        use super::schema::DirectoryMetadata::dsl::*;
-
-        let res = DirectoryMetadata
-            .filter(key.eq(k))
-            .inner_join(Directories)
-            .load::<(DirectoryKeyValuePair, Directory)>(&self.conn).to_db_err()?
-            .into_iter()
-            .map(|x| x.1)
-            .collect();
-
-        Ok(res)
-    }
-
-    fn get_directories_with_key_and_value<B: FromIterator<Directory>>(&self, k: &str, v: &str) -> Result<B, SqliteError> {
-        use super::schema::Directories::dsl::*;
-        use super::schema::DirectoryMetadata::dsl::*;
-
-        let res = DirectoryMetadata
-            .filter(key.eq(k).and(value.eq(v)))
-            .inner_join(Directories)
-            .load::<(DirectoryKeyValuePair, Directory)>(&self.conn).to_db_err()?
-            .into_iter()
-            .map(|x| x.1)
-            .collect();
-
-        Ok(res)
-    }
-
-    fn get_file(&self, p: &str) -> Result<Option<(File, Directory)>, SqliteError> {
-        use super::schema::Files::dsl::*;
-
-        let p = &preprocess(p);
-
-        let parent = match parent_dir(p) {
-            Some(s) => s,
-            None => return Err(ApplicationError("The path does not have a parent directory ('{}' was given).".to_owned()))
-        };
-
-        let fname = super::path::filename(p);
-        
-        let dir = match self.get_directory(parent)? {
-            Some(s) => s,
-            None => return Ok(None)
-        };
-
-        File::belonging_to(&dir)
-            .filter(filename.eq(fname))
-            .first::<File>(&self.conn)
-            .optional()
-            .map_value(|s| (s, dir))
-            .to_db_err()
-    }
-
-    fn get_files<B: FromIterator<File>>(&self) -> Result<B, SqliteError> {
-        use super::schema::Files::dsl::*;
-        
-        let res = Files.load::<File>(&self.conn).to_db_err()?
-                    .into_iter()
-                    .collect();
-
-        Ok(res)
-    }
-
-    fn get_files_with_key<B: FromIterator<File>>(&self, k: &str) -> Result<B, SqliteError> {
-        use super::schema::Files::dsl::*;
-        use super::schema::FileMetadata::dsl::*;
-        
-        let res = FileMetadata
-            .filter(key.eq(k))
-            .inner_join(Files)
-            .load::<(FileKeyValuePair, File)>(&self.conn).to_db_err()?
-            .into_iter()
-            .map(|x| x.1)
-            .collect();
-
-        Ok(res)
-    }
-
-    fn get_files_with_key_and_value<B: FromIterator<File>>(&self, k: &str, v: &str) -> Result<B, SqliteError> {
-        use super::schema::Files::dsl::*;
-        use super::schema::FileMetadata::dsl::*;
-
-        let res = FileMetadata
-            .filter(key.eq(k).and(value.eq(v)))
-            .inner_join(Files)
-            .load::<(FileKeyValuePair, File)>(&self.conn).to_db_err()?
-            .iter()
-            .map(|x| x.1.clone())
-            .collect();
-
-        Ok(res)
+                    .filter(|x| match filename_parent_map.get(&x.1.filename) {
+                                    Some(set) => set.contains(&x.0.path),
+                                    None => false
+                                })
+                    .map(|x| x.1)
+                    .into_vec();
+                        
+        Ok(dirs.into_iter().map(Entry::Directory)
+            .chain(files.into_iter().map(Entry::File))
+            .collect())
     }
 
     fn add_directory(&self, p: &str) -> Result<(Directory, bool), SqliteError> {
         use super::schema::Directories::dsl::*;
 
-        let p = &preprocess(p);
+        if let Some(s) = self.get_entry(p)? {
+            match s {
+                Entry::File(_) => return Err(ApplicationError(format!("A file with path '{}' already exists.", p))),
+                Entry::Directory(d) => return Ok((d, false))
+            }
+        }
+
+        let p = Path::new(p);
 
         let res = insert_into(Directories)
             .values(NewDirectory {
-                path: p
+                path: p.str()
             })
             .execute(&self.conn).to_db_err()?;
 
-        let dir = Directories.filter(path.eq(p))
+        let dir = Directories.filter(path.eq(p.str()))
             .first::<Directory>(&self.conn).to_db_err()?;
 
         if res == 0 {
             return Ok((dir, false));
         }
 
-        while let Some(p) = parent_dir(p) {
+        p.pop();
+        while p.str().len() > 1 {
             let res = insert_into(Directories)
                 .values(NewDirectory {
-                    path: p
+                    path: p.str()
                 })
                 .execute(&self.conn).to_db_err()?;
             
             if res == 0 {
                 break;
             }
+
+            p.pop();
         }
 
         return Ok((dir, true));
@@ -449,18 +512,15 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
     fn add_directories<'b, I: Iterator<Item=&'b str>>(&self, paths: I) -> Result<usize, SqliteError> {
         use super::schema::Directories::dsl::*;
 
-        let mut pat_cache = Vec::<String>::new();
+        let pat_cache = paths.map(Path::new).into_vec();
         let mut pat_refs = Vec::<&str>::new();
 
-        for p in paths {
-            pat_cache.push(preprocess(p));
-        }
-
         for p in &pat_cache {
-            pat_refs.push(p);
+            let s = p.str();
 
-            while let Some(p) = parent_dir(p) {
-                pat_refs.push(p);
+            while s.len() > 1 {
+                pat_refs.push(s);
+                s = Path::parent_str(s);
             }
         }
 
@@ -913,7 +973,7 @@ impl<'a> Database<'a, SqliteError> for SqliteDatabase {
 
         let new_dirs = pat_refs.into_iter().map(|p| NewDirectory {
                 path: p
-            }).collect::<Vec<NewDirectory>>();
+            }).to_vec();
 
         let res = insert_or_ignore_into(Directories)
             .values(new_dirs)
