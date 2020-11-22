@@ -1,11 +1,9 @@
-use std::collections::BTreeMap;
 use super::models::*;
 use super::database::{Database, Entry};
 use super::path::Path;
-use super::option_result::OptionResult;
 
 use std::sync::{RwLock, Mutex, RwLockReadGuard, RwLockWriteGuard};
-use std::iter::{Chain, FromIterator};
+use std::iter::FromIterator;
 use std::collections::{HashMap, HashSet};
 use diesel::{insert_into, insert_or_ignore_into, update, delete};
 use diesel::prelude::*;
@@ -185,15 +183,15 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
                                 use super::schema::FileMetadata::dsl::*;
 
                                 update(FileMetadata)
-                                    .filter(key.eq(k))
+                                    .filter(key.eq(k).and(file_id.eq(f.id)))
                                     .set(value.eq(val))
                                     .execute(&self.conn).to_db_err()?;
                             },
-                            Entry::Directory(f) => {
+                            Entry::Directory(d) => {
                                 use super::schema::DirectoryMetadata::dsl::*;
 
                                 update(DirectoryMetadata)
-                                    .filter(key.eq(k))
+                                    .filter(key.eq(k).and(directory_id.eq(d.id)))
                                     .set(value.eq(val))
                                     .execute(&self.conn).to_db_err()?;
                             }
@@ -223,15 +221,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
     }
 
     fn entries_metadata<'b, B: FromIterator<(Entry, Vec<(String, String)>)>, I: Iterator<Item=&'b Entry>>(&self, entries: I) -> Result<B, SqliteError> {
-        let mut f = Vec::<File>::new();
-        let mut d = Vec::<Directory>::new();
-
-        for e in entries {
-            match e {
-                Entry::File(file) => f.push(file.clone()),
-                Entry::Directory(dir) => d.push(dir.clone())
-            }
-        };
+        let (f, d) = Entry::iter_split(entries.map(|x| x.clone()));
 
         let fres = FileKeyValuePair::belonging_to(&f)
             .load::<FileKeyValuePair>(&self.conn).to_db_err()?
@@ -246,24 +236,16 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
             .zip(&d);
 
         return Ok(
-            fres.into_iter().map(|x| (Entry::File(*x.1), x.0.into_iter().map(|x| (x.key, x.value)).collect()))
+            fres.into_iter().map(|x| (Entry::File(x.1.clone()), x.0.into_iter().map(|x| (x.key, x.value)).collect()))
             .chain(
-                dres.into_iter().map(|x| (Entry::Directory(*x.1), x.0.into_iter().map(|x| (x.key, x.value)).collect()))
+                dres.into_iter().map(|x| (Entry::Directory(x.1.clone()), x.0.into_iter().map(|x| (x.key, x.value)).collect()))
             )
             .collect()
         )
     }
 
     fn entries_metadata_get<'b, B: FromIterator<(Entry, String)>, I: Iterator<Item=&'b Entry>>(&self, entries: I, k: &str) -> Result<B, SqliteError> {
-        let mut f = Vec::<File>::new();
-        let mut d = Vec::<Directory>::new();
-
-        for e in entries {
-            match e {
-                Entry::File(file) => f.push(file.clone()),
-                Entry::Directory(dir) => d.push(dir.clone())
-            }
-        };
+        let (f, d) = Entry::iter_split(entries.map(|x| x.clone()));
 
         let fres = FileKeyValuePair::belonging_to(&f)
             .filter(super::schema::FileMetadata::dsl::key.eq(k))
@@ -282,11 +264,11 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         return Ok(
             fres.into_iter()
                 .map(|x| 
-                    (Entry::File(*x.1), x.0.into_iter().next().map(|y| y.value)))
+                    (Entry::File(x.1.clone()), x.0.into_iter().next().map(|y| y.value)))
             .chain(
                 dres.into_iter()
                     .map(|x|
-                        (Entry::Directory(*x.1), x.0.into_iter().next().map(|y| y.value)))
+                        (Entry::Directory(x.1.clone()), x.0.into_iter().next().map(|y| y.value)))
             )
             .filter(|x| x.1.is_some())
             .map(|x| (x.0, x.1.unwrap()))
@@ -296,10 +278,10 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
 
     fn entries_metadata_set<'b, B: FromIterator<(Entry, Option<String>)>, I: Iterator<Item=&'b Entry>>(&self, entries: I, k: &str, v: Option<&str>) -> Result<B, SqliteError> {
         self.conn.immediate_transaction(|| {
-            let ret = Vec::<(Entry, Option<String>)>::new();
+            let mut ret = Vec::<(Entry, Option<String>)>::new();
 
             for entry in entries {
-                ret.push((*entry, self.entry_metadata_set(entry, k, v)?));
+                ret.push((entry.clone(), self.entry_metadata_set(entry, k, v)?));
             }
 
             Ok(ret.into_iter().collect())
@@ -310,15 +292,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         use super::schema::FileMetadata::dsl::*;
         use super::schema::DirectoryMetadata::dsl::*;
 
-        let mut f = Vec::<File>::new();
-        let mut d = Vec::<Directory>::new();
-
-        for entry in entries {
-            match entry {
-                Entry::File(ff) => f.push(*ff),
-                Entry::Directory(dd) => d.push(*dd)
-            }
-        }
+        let (f, d) = Entry::iter_split(entries.map(|x| x.clone()));
 
         let mut sz = delete(FileMetadata.filter(file_id.eq_any(f.iter().map(|x| x.id).into_vec())))
                     .execute(&self.conn)?;
@@ -357,7 +331,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         use super::schema::Directories::dsl::*;
         use super::schema::Files::dsl::*;
 
-        let dirs = Directories.filter(path.like(&(d.path + "%")))
+        let dirs = Directories.filter(path.like(&(d.path.clone() + "%")))
                     .load::<Directory>(&self.conn).to_db_err()?;
 
         let ids = dirs.iter().map(|x| x.id).into_vec();
@@ -380,7 +354,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         use super::schema::FileMetadata;
         use super::schema::DirectoryMetadata;
 
-        let dirs = Directories.filter(path.like(&(d.path + "%")))
+        let dirs = Directories.filter(path.like(&(d.path.clone() + "%")))
                     .inner_join(DirectoryMetadata::table)
                     .filter(DirectoryMetadata::key.eq(k))
                     .load::<(Directory, DirectoryKeyValuePair)>(&self.conn).to_db_err()?
@@ -413,7 +387,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         use super::schema::FileMetadata;
         use super::schema::DirectoryMetadata;
 
-        let dirs = Directories.filter(path.like(&(d.path + "%")))
+        let dirs = Directories.filter(path.like(&(d.path.clone() + "%")))
                     .inner_join(DirectoryMetadata::table)
                     .filter(DirectoryMetadata::key.eq(k).and(DirectoryMetadata::value.eq(v)))
                     .load::<(Directory, DirectoryKeyValuePair)>(&self.conn).to_db_err()?
@@ -471,17 +445,18 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         use super::schema::Files::dsl::*;
 
         let pstrs = paths.into_vec();
-        let parents = pstrs.iter().map(|x| Path::new(x).parent()).into_vec();
-        let filenames = pstrs.iter().map(|x| Path::new(x).filename()).into_vec();
+        let paths = pstrs.iter().map(|x| Path::new(x)).into_vec();
+        let parents = paths.iter().map(|x| x.parent()).into_vec();
+        let filenames = paths.iter().map(|x| x.filename()).into_vec();
         let mut filename_parent_map = HashMap::<String, HashSet<String>>::new();
 
-        for (f, d) in filenames.iter().zip(parents) {
+        for (f, d) in filenames.iter().zip(parents.iter()) {
             if let Some(set) = filename_parent_map.get_mut(f.to_owned()) {
-                set.insert(d.to_owned());
+                set.insert((*d).to_owned());
             }
             else {
-                let set = HashSet::new();
-                set.insert(d.to_owned());
+                let mut set = HashSet::new();
+                set.insert((*d).to_owned());
                 filename_parent_map.insert((*f).to_owned(), set);
             }
         }
@@ -516,7 +491,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
             }
         }
 
-        let p = Path::new(p);
+        let mut p = Path::new(p);
 
         let res = insert_into(Directories)
             .values(NewDirectory {
@@ -556,7 +531,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         let mut pat_refs = Vec::<&str>::new();
 
         for p in &pat_cache {
-            let s = p.str();
+            let mut s = p.str();
 
             while s.len() > 1 {
                 pat_refs.push(s);
@@ -617,7 +592,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
             let dir = match self.get_entry(parent)? {
                 Some(e) => match e {
                     Entry::Directory(d) => d,
-                    Entry::File(e) => return Err(ApplicationError(format!("The paths [{}] are invalid since their parent directory '{}' is listed as a file.", tuples.iter().map(|x| x.0.str()).into_vec().pretty_pathify(), parent)))
+                    Entry::File(_) => return Err(ApplicationError(format!("The paths [{}] are invalid since their parent directory '{}' is listed as a file.", tuples.iter().map(|x| x.0.str()).into_vec().pretty_pathify(), parent)))
                 },
                 None => self.add_directory(parent)?.0
             };
@@ -663,15 +638,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         use super::schema::Files;
         use super::schema::Directories;
 
-        let mut f = Vec::<File>::new();
-        let mut d = Vec::<Directory>::new();
-
-        for entry in entries {
-            match entry {
-                Entry::File(ff) => f.push(*ff),
-                Entry::Directory(dd) => d.push(*dd)
-            }
-        }
+        let (f, d) = Entry::iter_split(entries.map(|x| x.clone()));
 
         let mut sz = delete(
             Files::table.filter(Files::id.eq_any(f.iter().map(|x| x.id).into_vec()))
@@ -733,11 +700,11 @@ impl SqliteDatabase {
         })
     }
 
-    pub fn ctx(&self, request: &[(Lock, LockMode)]) -> SqliteDatabaseLockContext<'_> {
+    fn ctx(&self, request: &[(Lock, LockMode)]) -> SqliteDatabaseLockContext<'_> {
         use self::Lock::*;
         use self::LockMode::*;
 
-        let ret = SqliteDatabaseLockContext {
+        let mut ret = SqliteDatabaseLockContext {
             file: LockGuard::Empty,
             file_meta: LockGuard::Empty,
             dir: LockGuard::Empty,
@@ -748,10 +715,10 @@ impl SqliteDatabase {
 
         for (lock, mode) in request {
             let (r, l) = match lock {
-                File => (&mut ret.file, self.file_lock),
-                FileMeta => (&mut ret.file_meta, self.file_meta_lock),
-                Dir => (&mut ret.dir, self.dir_lock),
-                DirMeta => (&mut ret.dir_meta, self.dir_meta_lock)
+                File => (&mut ret.file, &self.file_lock),
+                FileMeta => (&mut ret.file_meta, &self.file_meta_lock),
+                Dir => (&mut ret.dir, &self.dir_lock),
+                DirMeta => (&mut ret.dir_meta, &self.dir_meta_lock)
             };
 
             *r = match mode {

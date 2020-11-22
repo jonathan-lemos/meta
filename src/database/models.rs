@@ -6,7 +6,7 @@ use super::schema::*;
         the table name cannot be the same as the struct name
 */
 
-#[derive(Identifiable, Queryable, Clone, Debug)]
+#[derive(Identifiable, Queryable, Clone, PartialEq, Eq, Debug)]
 #[table_name="Directories"]
 pub struct Directory {
     pub id: i32,
@@ -22,7 +22,7 @@ pub struct NewDirectory<'a> {
 impl Directory {
 }
 
-#[derive(Identifiable, Queryable, PartialEq, Associations, Debug, Clone)]
+#[derive(Identifiable, Queryable, PartialEq, Eq, Associations, Debug, Clone)]
 #[belongs_to(Directory)]
 #[table_name = "Files"]
 pub struct File {
@@ -32,7 +32,7 @@ pub struct File {
     pub hash: Vec<u8> 
 }
 
-#[derive(Insertable, PartialEq, Associations, Debug)]
+#[derive(Insertable, PartialEq, Eq, Associations, Debug)]
 #[belongs_to(Directory)]
 #[table_name = "Files"]
 pub struct NewFile<'a> {
@@ -41,7 +41,7 @@ pub struct NewFile<'a> {
     pub hash: &'a [u8]
 }
 
-#[derive(Identifiable, Queryable, PartialEq, Associations, Debug, Clone)]
+#[derive(Identifiable, Queryable, PartialEq, Eq, Associations, Debug, Clone)]
 #[belongs_to(File)]
 #[table_name = "FileMetadata"]
 pub struct FileKeyValuePair {
@@ -51,7 +51,7 @@ pub struct FileKeyValuePair {
     pub value: String
 }
 
-#[derive(Insertable, Associations, Debug)]
+#[derive(Insertable, Associations, PartialEq, Eq, Debug)]
 #[belongs_to(File)]
 #[table_name = "FileMetadata"]
 pub struct NewFileKeyValuePair<'a> {
@@ -60,7 +60,7 @@ pub struct NewFileKeyValuePair<'a> {
     pub value: &'a str
 }
 
-#[derive(Identifiable, Queryable, PartialEq, Associations, Debug, Clone)]
+#[derive(Identifiable, Queryable, PartialEq, Eq, Associations, Debug, Clone)]
 #[belongs_to(Directory)]
 #[table_name = "DirectoryMetadata"]
 pub struct DirectoryKeyValuePair {
@@ -70,7 +70,7 @@ pub struct DirectoryKeyValuePair {
     pub value: String
 }
 
-#[derive(Insertable, Associations, Debug)]
+#[derive(Insertable, Associations, PartialEq, Eq, Debug)]
 #[belongs_to(Directory)]
 #[table_name = "DirectoryMetadata"]
 pub struct NewDirectoryKeyValuePair<'a> {

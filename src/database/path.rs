@@ -1,5 +1,4 @@
 use std::ops::{Add, AddAssign, Div, DivAssign};
-use std::cmp::max;
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone, PartialOrd, Ord)]
 pub struct Path {
@@ -94,36 +93,33 @@ impl DivAssign<&str> for Path {
     }
 }
 
-mod PathTests {
-    use super::Path;
 
-    #[test]
-    fn test_filename() {
-        let cases = [
-            ("/foo", "foo"),
-            ("/foo/bar", "bar"),
-            ("/", "")
-        ];
+#[test]
+fn test_filename() {
+    let cases = [
+        ("/foo", "foo"),
+        ("/foo/bar", "bar"),
+        ("/", "")
+    ];
 
-        let paths = cases.iter().map(|x| Path::new(x.0)).collect::<Vec<Path>>();
+    let paths = cases.iter().map(|x| Path::new(x.0)).collect::<Vec<Path>>();
 
-        for (path, exp) in paths.iter().zip(cases.iter().map(|x| x.1)) {
-            assert_eq!(path.filename(), exp);
-        }
+    for (path, exp) in paths.iter().zip(cases.iter().map(|x| x.1)) {
+        assert_eq!(path.filename(), exp);
     }
+}
 
-    #[test]
-    fn test_pop() {
-        let cases = [
-            ("/foo", "/"),
-            ("/foo/bar", "/foo"),
-            ("/", "/")
-        ];
+#[test]
+fn test_parent() {
+    let cases = [
+        ("/foo", "/"),
+        ("/foo/bar", "/foo"),
+        ("/", "/")
+    ];
 
-        let paths = cases.iter().map(|x| Path::new(x.0)).collect::<Vec<Path>>();
+    let paths = cases.iter().map(|x| Path::new(x.0)).collect::<Vec<Path>>();
 
-        for (path, exp) in paths.iter().zip(cases.iter().map(|x| x.1)) {
-            assert_eq!(path.parent(), exp);
-        }
+    for (path, exp) in paths.iter().zip(cases.iter().map(|x| x.1)) {
+        assert_eq!(path.parent(), exp);
     }
 }

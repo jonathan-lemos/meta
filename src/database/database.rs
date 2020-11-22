@@ -1,11 +1,26 @@
-use std::collections::BTreeMap;
-use crate::functional::either::Either;
 use std::iter::FromIterator;
 use crate::database::models::{Directory, File};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry {
     File(File),
     Directory(Directory)
+}
+
+impl Entry {
+    pub fn iter_split<I: Iterator<Item=Entry>>(iter: I) -> (Vec<File>, Vec<Directory>) {
+        let mut f = Vec::<File>::new();
+        let mut d = Vec::<Directory>::new();
+
+        for entry in iter {
+            match entry {
+                Entry::File(ff) => f.push(ff),
+                Entry::Directory(dd) => d.push(dd)
+            }
+        }
+
+        (f, d)
+    }
 }
 
 pub trait Database<'a, E> {
