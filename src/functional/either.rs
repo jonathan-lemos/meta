@@ -1,8 +1,10 @@
+#![allow(dead_code)]
+
 use self::Either::*;
 
 pub enum Either<L, R> {
     Left(L),
-    Right(R)
+    Right(R),
 }
 
 impl<L, R> Either<L, R> {

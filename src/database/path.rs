@@ -14,8 +14,7 @@ impl Path {
             let mut tmp = "/".to_owned();
             tmp += s;
             tmp
-        }
-        else {
+        } else {
             s.to_owned()
         };
 
@@ -35,8 +34,7 @@ impl Path {
 
         if r.len() > 0 {
             r
-        }
-        else {
+        } else {
             "/"
         }
     }

@@ -1,10 +1,11 @@
 use std::iter::FromIterator;
+
 use crate::database::models::{Directory, File};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry {
     File(File),
-    Directory(Directory)
+    Directory(Directory),
 }
 
 impl Entry {

@@ -1,6 +1,8 @@
+#![allow(dead_code)]
+
 pub enum Lazy<'a, T: ?Sized> {
     Loaded(Box<T>),
-    NotLoaded(Option<Box<dyn FnOnce() -> T + 'a>>)
+    NotLoaded(Option<Box<dyn FnOnce() -> T + 'a>>),
 }
 
 impl<'a, T> Lazy<'a, T> {

@@ -1,5 +1,5 @@
-use std::hash::Hash;
 use std::collections::HashMap;
+use std::hash::Hash;
 
 pub trait GroupBy<K: Hash + Eq, T> {
     fn group_by<F: Fn(&T) -> K>(self, f: F) -> HashMap<K, Vec<T>>;

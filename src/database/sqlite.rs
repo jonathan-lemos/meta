@@ -1,17 +1,18 @@
-use super::models::*;
-use super::database::{Database, Entry};
-use super::path::Path;
-
-use std::sync::{RwLock, Mutex, RwLockReadGuard, RwLockWriteGuard};
-use std::iter::FromIterator;
 use std::collections::{HashMap, HashSet};
-use diesel::{insert_into, insert_or_ignore_into, update, delete};
+use std::iter::FromIterator;
+use std::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+use diesel::{delete, insert_into, insert_or_ignore_into, update};
 use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
 
 use crate::database::sqlite::SqliteError::*;
-use crate::linq::collectors::Collect;
 use crate::format::prettify::PrettyPaths;
+use crate::linq::collectors::IntoVec;
+
+use super::database::{Database, Entry};
+use super::models::*;
+use super::path::Path;
 
 embed_migrations!();
 
@@ -21,11 +22,11 @@ pub enum SqliteError {
 }
 
 trait ToSqlite<T> {
-    fn to_db_err(self) -> Result<T, SqliteError>;
+    fn into_db_err(self) -> Result<T, SqliteError>;
 }
 
 impl<T> ToSqlite<T> for diesel::result::QueryResult<T> {
-    fn to_db_err(self) -> Result<T, SqliteError> {
+    fn into_db_err(self) -> Result<T, SqliteError> {
         match self {
             Ok(t) => Ok(t),
             Err(e) => Err(DbError(e))
@@ -60,7 +61,7 @@ impl UnsynchronizedSqliteDatabase {
         };
 
         match embedded_migrations::run(&conn) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => return Err(ApplicationError(format!("Failed to run migrations: {:?}", e)))
         }
 
@@ -75,7 +76,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
 
         Ok(Files.find(f.id)
             .inner_join(Directories)
-            .first::<(File, Directory)>(&self.conn).to_db_err()?
+            .first::<(File, Directory)>(&self.conn).into_db_err()?
             .1)
     }
 
@@ -86,7 +87,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
 
                 Ok(FileKeyValuePair::belonging_to(f)
                     .select((key, value))
-                    .load::<(String, String)>(&self.conn).to_db_err()?
+                    .load::<(String, String)>(&self.conn).into_db_err()?
                     .into_iter()
                     .collect())
             }
@@ -95,7 +96,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
 
                 Ok(DirectoryKeyValuePair::belonging_to(d)
                     .select((key, value))
-                    .load::<(String, String)>(&self.conn).to_db_err()?
+                    .load::<(String, String)>(&self.conn).into_db_err()?
                     .into_iter()
                     .collect())
             }
@@ -111,7 +112,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
                     .filter(key.eq(k))
                     .select(value)
                     .first::<String>(&self.conn)
-                    .optional().to_db_err()
+                    .optional().into_db_err()
             }
             Entry::Directory(d) => {
                 use super::schema::DirectoryMetadata::dsl::*;
@@ -120,7 +121,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
                     .filter(key.eq(k))
                     .select(value)
                     .first::<String>(&self.conn)
-                    .optional().to_db_err()
+                    .optional().into_db_err()
             }
         }
     }
@@ -136,19 +137,19 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
 
                         delete(
                             FileKeyValuePair::belonging_to(f)
-                            .filter(key.eq(k))
-                        ).execute(&self.conn).to_db_err()?;
+                                .filter(key.eq(k))
+                        ).execute(&self.conn).into_db_err()?;
                     }
                     Entry::Directory(d) => {
                         use super::schema::DirectoryMetadata::dsl::*;
 
                         delete(
                             DirectoryKeyValuePair::belonging_to(d)
-                            .filter(key.eq(k))
-                        ).execute(&self.conn).to_db_err()?;
+                                .filter(key.eq(k))
+                        ).execute(&self.conn).into_db_err()?;
                     }
                 }
-            },
+            }
             Some(val) => {
                 match &existing {
                     None => {
@@ -160,9 +161,9 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
                                     .values(&NewFileKeyValuePair {
                                         file_id: f.id,
                                         key: k,
-                                        value: val
+                                        value: val,
                                     })
-                                    .execute(&self.conn).to_db_err()?;
+                                    .execute(&self.conn).into_db_err()?;
                             }
                             Entry::Directory(d) => {
                                 use super::schema::DirectoryMetadata::dsl::*;
@@ -171,9 +172,9 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
                                     .values(&NewDirectoryKeyValuePair {
                                         directory_id: d.id,
                                         key: k,
-                                        value: val
+                                        value: val,
                                     })
-                                    .execute(&self.conn).to_db_err()?;
+                                    .execute(&self.conn).into_db_err()?;
                             }
                         }
                     }
@@ -185,15 +186,15 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
                                 update(FileMetadata)
                                     .filter(key.eq(k).and(file_id.eq(f.id)))
                                     .set(value.eq(val))
-                                    .execute(&self.conn).to_db_err()?;
-                            },
+                                    .execute(&self.conn).into_db_err()?;
+                            }
                             Entry::Directory(d) => {
                                 use super::schema::DirectoryMetadata::dsl::*;
 
                                 update(DirectoryMetadata)
                                     .filter(key.eq(k).and(directory_id.eq(d.id)))
                                     .set(value.eq(val))
-                                    .execute(&self.conn).to_db_err()?;
+                                    .execute(&self.conn).into_db_err()?;
                             }
                         }
                     }
@@ -224,24 +225,24 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         let (f, d) = Entry::iter_split(entries.map(|x| x.clone()));
 
         let fres = FileKeyValuePair::belonging_to(&f)
-            .load::<FileKeyValuePair>(&self.conn).to_db_err()?
+            .load::<FileKeyValuePair>(&self.conn).into_db_err()?
             .grouped_by(&f)
             .into_iter()
             .zip(&f);
 
         let dres = DirectoryKeyValuePair::belonging_to(&d)
-            .load::<DirectoryKeyValuePair>(&self.conn).to_db_err()?
+            .load::<DirectoryKeyValuePair>(&self.conn).into_db_err()?
             .grouped_by(&d)
             .into_iter()
             .zip(&d);
 
         return Ok(
             fres.into_iter().map(|x| (Entry::File(x.1.clone()), x.0.into_iter().map(|x| (x.key, x.value)).collect()))
-            .chain(
-                dres.into_iter().map(|x| (Entry::Directory(x.1.clone()), x.0.into_iter().map(|x| (x.key, x.value)).collect()))
-            )
-            .collect()
-        )
+                .chain(
+                    dres.into_iter().map(|x| (Entry::Directory(x.1.clone()), x.0.into_iter().map(|x| (x.key, x.value)).collect()))
+                )
+                .collect()
+        );
     }
 
     fn entries_metadata_get<'b, B: FromIterator<(Entry, String)>, I: Iterator<Item=&'b Entry>>(&self, entries: I, k: &str) -> Result<B, SqliteError> {
@@ -249,31 +250,31 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
 
         let fres = FileKeyValuePair::belonging_to(&f)
             .filter(super::schema::FileMetadata::dsl::key.eq(k))
-            .load::<FileKeyValuePair>(&self.conn).to_db_err()?
+            .load::<FileKeyValuePair>(&self.conn).into_db_err()?
             .grouped_by(&f)
             .into_iter()
             .zip(&f);
 
         let dres = DirectoryKeyValuePair::belonging_to(&d)
             .filter(super::schema::DirectoryMetadata::dsl::key.eq(k))
-            .load::<DirectoryKeyValuePair>(&self.conn).to_db_err()?
+            .load::<DirectoryKeyValuePair>(&self.conn).into_db_err()?
             .grouped_by(&d)
             .into_iter()
             .zip(&d);
 
         return Ok(
             fres.into_iter()
-                .map(|x| 
+                .map(|x|
                     (Entry::File(x.1.clone()), x.0.into_iter().next().map(|y| y.value)))
-            .chain(
-                dres.into_iter()
-                    .map(|x|
-                        (Entry::Directory(x.1.clone()), x.0.into_iter().next().map(|y| y.value)))
-            )
-            .filter(|x| x.1.is_some())
-            .map(|x| (x.0, x.1.unwrap()))
-            .collect()
-        )
+                .chain(
+                    dres.into_iter()
+                        .map(|x|
+                            (Entry::Directory(x.1.clone()), x.0.into_iter().next().map(|y| y.value)))
+                )
+                .filter(|x| x.1.is_some())
+                .map(|x| (x.0, x.1.unwrap()))
+                .collect()
+        );
     }
 
     fn entries_metadata_set<'b, B: FromIterator<(Entry, Option<String>)>, I: Iterator<Item=&'b Entry>>(&self, entries: I, k: &str, v: Option<&str>) -> Result<B, SqliteError> {
@@ -285,7 +286,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
             }
 
             Ok(ret.into_iter().collect())
-        }).to_db_err()
+        }).into_db_err()
     }
 
     fn entries_metadata_clear<'b, I: Iterator<Item=&'b Entry>>(&self, entries: I) -> Result<usize, SqliteError> {
@@ -295,10 +296,10 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         let (f, d) = Entry::iter_split(entries.map(|x| x.clone()));
 
         let mut sz = delete(FileMetadata.filter(file_id.eq_any(f.iter().map(|x| x.id).into_vec())))
-                    .execute(&self.conn)?;
+            .execute(&self.conn)?;
 
         sz += delete(DirectoryMetadata.filter(directory_id.eq_any(d.iter().map(|x| x.id).into_vec())))
-                    .execute(&self.conn)?;
+            .execute(&self.conn)?;
 
         Ok(sz)
     }
@@ -308,14 +309,14 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         use super::schema::Files::dsl::*;
 
         let r1 = Directories.find(d.id)
-                    .inner_join(Files)
-                    .filter(filename.eq(fname))
-                    .first::<(Directory, File)>(&self.conn)
-                    .map(|x| x.1)
-                    .optional().to_db_err()?;
-        
+            .inner_join(Files)
+            .filter(filename.eq(fname))
+            .first::<(Directory, File)>(&self.conn)
+            .map(|x| x.1)
+            .optional().into_db_err()?;
+
         if let Some(r) = r1 {
-            return Ok(Some(Entry::File(r)))
+            return Ok(Some(Entry::File(r)));
         }
 
         let target = Path::new(&d.path) / fname;
@@ -323,7 +324,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         Ok(Directories.filter(path.eq(target.str()))
             .first::<Directory>(&self.conn)
             .optional()
-            .to_db_err()?
+            .into_db_err()?
             .map(|x| Entry::Directory(x)))
     }
 
@@ -332,19 +333,19 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         use super::schema::Files::dsl::*;
 
         let dirs = Directories.filter(path.like(&(d.path.clone() + "%")))
-                    .load::<Directory>(&self.conn).to_db_err()?;
+            .load::<Directory>(&self.conn).into_db_err()?;
 
         let ids = dirs.iter().map(|x| x.id).into_vec();
 
         let files = Files.filter(directory_id.eq_any(ids))
-                    .load::<File>(&self.conn).to_db_err()?;
+            .load::<File>(&self.conn).into_db_err()?;
 
-        Ok (
+        Ok(
             dirs.into_iter()
                 .map(Entry::Directory)
-            .chain(files.into_iter()
+                .chain(files.into_iter()
                     .map(Entry::File)
-            ).collect()
+                ).collect()
         )
     }
 
@@ -355,29 +356,29 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         use super::schema::DirectoryMetadata;
 
         let dirs = Directories.filter(path.like(&(d.path.clone() + "%")))
-                    .inner_join(DirectoryMetadata::table)
-                    .filter(DirectoryMetadata::key.eq(k))
-                    .load::<(Directory, DirectoryKeyValuePair)>(&self.conn).to_db_err()?
-                    .into_iter()
-                    .map(|x| x.0)
-                    .into_vec();
+            .inner_join(DirectoryMetadata::table)
+            .filter(DirectoryMetadata::key.eq(k))
+            .load::<(Directory, DirectoryKeyValuePair)>(&self.conn).into_db_err()?
+            .into_iter()
+            .map(|x| x.0)
+            .into_vec();
 
         let ids = dirs.iter().map(|x| x.id).into_vec();
 
         let files = Files.filter(directory_id.eq_any(ids))
-                     .inner_join(FileMetadata::table)
-                     .filter(FileMetadata::key.eq(k))
-                     .load::<(File, FileKeyValuePair)>(&self.conn).to_db_err()?
-                     .into_iter()
-                     .map(|x| x.0)
-                     .into_vec();
+            .inner_join(FileMetadata::table)
+            .filter(FileMetadata::key.eq(k))
+            .load::<(File, FileKeyValuePair)>(&self.conn).into_db_err()?
+            .into_iter()
+            .map(|x| x.0)
+            .into_vec();
 
-        Ok (
+        Ok(
             dirs.into_iter()
                 .map(Entry::Directory)
-            .chain(files.into_iter()
+                .chain(files.into_iter()
                     .map(Entry::File)
-            ).collect()
+                ).collect()
         )
     }
 
@@ -388,42 +389,42 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         use super::schema::DirectoryMetadata;
 
         let dirs = Directories.filter(path.like(&(d.path.clone() + "%")))
-                    .inner_join(DirectoryMetadata::table)
-                    .filter(DirectoryMetadata::key.eq(k).and(DirectoryMetadata::value.eq(v)))
-                    .load::<(Directory, DirectoryKeyValuePair)>(&self.conn).to_db_err()?
-                    .into_iter()
-                    .map(|x| x.0)
-                    .into_vec();
+            .inner_join(DirectoryMetadata::table)
+            .filter(DirectoryMetadata::key.eq(k).and(DirectoryMetadata::value.eq(v)))
+            .load::<(Directory, DirectoryKeyValuePair)>(&self.conn).into_db_err()?
+            .into_iter()
+            .map(|x| x.0)
+            .into_vec();
 
         let ids = dirs.iter().map(|x| x.id).into_vec();
 
         let files = Files.filter(directory_id.eq_any(ids))
-                     .inner_join(FileMetadata::table)
-                     .filter(FileMetadata::key.eq(k).and(FileMetadata::value.eq(v)))
-                     .load::<(File, FileKeyValuePair)>(&self.conn).to_db_err()?
-                     .into_iter()
-                     .map(|x| x.0)
-                     .into_vec();
+            .inner_join(FileMetadata::table)
+            .filter(FileMetadata::key.eq(k).and(FileMetadata::value.eq(v)))
+            .load::<(File, FileKeyValuePair)>(&self.conn).into_db_err()?
+            .into_iter()
+            .map(|x| x.0)
+            .into_vec();
 
-        Ok (
+        Ok(
             dirs.into_iter()
                 .map(Entry::Directory)
-            .chain(files.into_iter()
+                .chain(files.into_iter()
                     .map(Entry::File)
-            ).collect()
+                ).collect()
         )
     }
 
     fn get_entry(&self, p: &str) -> Result<Option<Entry>, SqliteError> {
         use super::schema::Directories::dsl::*;
         use super::schema::Files::dsl::*;
-        
+
         let pat = Path::new(p);
-        
+
         let d = Directories.filter(path.eq(pat.str()))
-                    .first::<Directory>(&self.conn)
-                    .optional()
-                    .to_db_err()?;
+            .first::<Directory>(&self.conn)
+            .optional()
+            .into_db_err()?;
 
         if let Some(d) = d {
             return Ok(Some(Entry::Directory(d)));
@@ -436,7 +437,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
             .filter(filename.eq(fnam))
             .first::<(Directory, File)>(&self.conn)
             .optional()
-            .to_db_err()?
+            .into_db_err()?
             .map(|x| Entry::File(x.1)))
     }
 
@@ -453,8 +454,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         for (f, d) in filenames.iter().zip(parents.iter()) {
             if let Some(set) = filename_parent_map.get_mut(f.to_owned()) {
                 set.insert((*d).to_owned());
-            }
-            else {
+            } else {
                 let mut set = HashSet::new();
                 set.insert((*d).to_owned());
                 filename_parent_map.insert((*f).to_owned(), set);
@@ -462,20 +462,20 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         }
 
         let dirs = Directories.filter(path.eq_any(pstrs))
-                    .load::<Directory>(&self.conn).to_db_err()?;
+            .load::<Directory>(&self.conn).into_db_err()?;
 
         let files = Directories.filter(path.eq_any(parents))
-                    .inner_join(Files)
-                    .filter(filename.eq_any(filenames))
-                    .load::<(Directory, File)>(&self.conn).to_db_err()?
-                    .into_iter()
-                    .filter(|x| match filename_parent_map.get(&x.1.filename) {
-                                    Some(set) => set.contains(&x.0.path),
-                                    None => false
-                                })
-                    .map(|x| x.1)
-                    .into_vec();
-                        
+            .inner_join(Files)
+            .filter(filename.eq_any(filenames))
+            .load::<(Directory, File)>(&self.conn).into_db_err()?
+            .into_iter()
+            .filter(|x| match filename_parent_map.get(&x.1.filename) {
+                Some(set) => set.contains(&x.0.path),
+                None => false
+            })
+            .map(|x| x.1)
+            .into_vec();
+
         Ok(dirs.into_iter().map(Entry::Directory)
             .chain(files.into_iter().map(Entry::File))
             .collect())
@@ -485,10 +485,10 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         use super::schema::Directories::dsl::*;
 
         if let Some(s) = self.get_entry(p)? {
-            match s {
-                Entry::File(_) => return Err(ApplicationError(format!("A file with path '{}' already exists.", p))),
-                Entry::Directory(d) => return Ok((d, false))
-            }
+            return match s {
+                Entry::File(_) => Err(ApplicationError(format!("A file with path '{}' already exists in the database.", p))),
+                Entry::Directory(d) => Ok((d, false))
+            };
         }
 
         let mut p = Path::new(p);
@@ -497,10 +497,10 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
             .values(NewDirectory {
                 path: p.str()
             })
-            .execute(&self.conn).to_db_err()?;
+            .execute(&self.conn).into_db_err()?;
 
         let dir = Directories.filter(path.eq(p.str()))
-            .first::<Directory>(&self.conn).to_db_err()?;
+            .first::<Directory>(&self.conn).into_db_err()?;
 
         if res == 0 {
             return Ok((dir, false));
@@ -512,8 +512,8 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
                 .values(NewDirectory {
                     path: p.str()
                 })
-                .execute(&self.conn).to_db_err()?;
-            
+                .execute(&self.conn).into_db_err()?;
+
             if res == 0 {
                 break;
             }
@@ -540,12 +540,12 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         }
 
         let new_dirs = pat_refs.into_iter().map(|p| NewDirectory {
-                path: p
-            }).collect::<Vec<NewDirectory>>();
+            path: p
+        }).collect::<Vec<NewDirectory>>();
 
         let res = insert_or_ignore_into(Directories)
             .values(new_dirs)
-            .execute(&self.conn).to_db_err()?;
+            .execute(&self.conn).into_db_err()?;
 
         return Ok(res);
     }
@@ -556,7 +556,7 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         if let Some(s) = self.get_entry(p)? {
             match s {
                 Entry::File(f) => return Ok((f, false)),
-                Entry::Directory(_) => return Err(ApplicationError(format!("A directory with path '{}' already exists.", p))),
+                Entry::Directory(_) => return Err(ApplicationError(format!("A directory with path '{}' already exists in the database.", p))),
             }
         }
 
@@ -568,12 +568,12 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
             .values(NewFile {
                 directory_id: dir.id,
                 filename: p.filename(),
-                hash: h
+                hash: h,
             })
-            .execute(&self.conn).to_db_err()?;
+            .execute(&self.conn).into_db_err()?;
 
         let file = Files.filter(filename.eq(p.filename()))
-            .first::<File>(&self.conn).to_db_err()?;
+            .first::<File>(&self.conn).into_db_err()?;
 
         return Ok((file, res > 0));
     }
@@ -600,12 +600,12 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
             let new_files = tuples.into_iter().map(|t| NewFile {
                 directory_id: dir.id,
                 filename: t.0.filename(),
-                hash: t.1
+                hash: t.1,
             }).collect::<Vec<NewFile>>();
 
             changes += insert_or_ignore_into(Files)
                 .values(new_files)
-                .execute(&self.conn).to_db_err()?;
+                .execute(&self.conn).into_db_err()?;
         }
 
         return Ok(changes);
@@ -619,16 +619,15 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
             Entry::File(f) => {
                 delete(
                     Files.find(f.id)
-                ).execute(&self.conn).to_db_err()?
-            },
+                ).execute(&self.conn).into_db_err()?
+            }
             Entry::Directory(d) => {
                 if d.path == "/" {
                     0
-                }
-                else {
+                } else {
                     delete(
                         Directories.find(d.id)
-                    ).execute(&self.conn).to_db_err()?
+                    ).execute(&self.conn).into_db_err()?
                 }
             }
         } > 0)
@@ -643,12 +642,12 @@ impl<'a> Database<'a, SqliteError> for UnsynchronizedSqliteDatabase {
         let mut sz = delete(
             Files::table.filter(Files::id.eq_any(f.iter().map(|x| x.id).into_vec()))
         )
-        .execute(&self.conn)?;
+            .execute(&self.conn)?;
 
         sz += delete(
             Directories::table.filter(Directories::id.eq_any(d.iter().map(|x| x.id).into_vec()))
         )
-        .execute(&self.conn)?;
+            .execute(&self.conn)?;
 
         Ok(sz)
     }
@@ -666,26 +665,26 @@ pub struct SqliteDatabase {
 enum LockGuard<'a> {
     Empty,
     Read(RwLockReadGuard<'a, i32>),
-    Write(RwLockWriteGuard<'a, i32>)
+    Write(RwLockWriteGuard<'a, i32>),
 }
 
 struct SqliteDatabaseLockContext<'a> {
     file: LockGuard<'a>,
     file_meta: LockGuard<'a>,
     dir: LockGuard<'a>,
-    dir_meta: LockGuard<'a>
+    dir_meta: LockGuard<'a>,
 }
 
 enum Lock {
     File,
     FileMeta,
     Dir,
-    DirMeta
+    DirMeta,
 }
 
 enum LockMode {
     Read,
-    Write
+    Write,
 }
 
 impl SqliteDatabase {

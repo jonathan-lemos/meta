@@ -1,4 +1,4 @@
-use crate::linq::collectors::Collect;
+use crate::linq::collectors::IntoVec;
 
 pub trait PrettyPaths {
     fn pretty_pathify(&self) -> String;
