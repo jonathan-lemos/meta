@@ -10,6 +10,8 @@ mod format;
 mod filesystem;
 mod functional;
 mod linq;
+mod os;
+mod concurrency;
 
 fn main() {
     println!("Hello, world!");

@@ -1,1 +1,1 @@
-pub mod argparse;
+pub mod queryparse;
