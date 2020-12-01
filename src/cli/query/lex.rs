@@ -1,72 +1,16 @@
-/// Parses a query from command-line arguments.
-/// The grammar for a query is as follows:
-///
-/// or-query -> and-query or or-query | and-query
-/// and-query -> factor and and-query | factor
-/// factor -> ( query ) | key | key is value // (command-line arguments in quotes e.g. 'this and that' are treated as being in parentheses)
-/// key -> [a-zA-Z0-9\-_]+
-/// eq -> == | =
-/// value -> quotation | string
-/// quotation -> "quote" | 'quote' (usual quote syntax)
-/// string -> .* (single line)
-
-use crate::linq::collectors::IntoVec;
-use std::convert::TryFrom;
-use crate::cli::queryparse::HexSequenceError::{NotEnoughChars, NonHexChar, NonUtf8Sequence};
 use regex::Regex;
+use std::convert::TryFrom;
+
+use crate::format::re::regex_expect;
 use crate::format::str::{ToCharIterator, StrExtensions};
-use crate::cli::queryparse::TokenLexError::NonLexableSequence;
+use crate::linq::collectors::IntoVec;
+use super::lexeme::{LexemeQueue, LexemeKind, Lexeme};
 
-#[derive(Debug, Eq, PartialEq, Clone)]
-struct Lexeme {
-    str: String,
-    kind: LexemeKind
-}
+use self::LexError::*;
+use self::StringLiteralLexError::*;
+use self::HexSequenceError::*;
 
-impl Lexeme {
-    pub fn new(str: String, kind: LexemeKind) -> Self {
-        Lexeme {str, kind}
-    }
-}
-
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-enum LexemeKind {
-    LParen,
-    RParen,
-    Equals,
-    Or,
-    And,
-    Identifier,
-    Value
-}
-
-pub struct OrQuery {
-    and_query: AndQuery,
-    next: Option<Box<OrQuery>>
-}
-
-pub struct AndQuery {
-    factor: Factor,
-    next: Option<Box<AndQuery>>
-}
-
-pub enum Factor {
-    Query(Box<OrQuery>),
-    Key(String),
-    KeyEqualsValue((String, Value))
-}
-
-pub enum Value {
-    String(String),
-    Quotation(String)
-}
-
-pub enum ParseError {
-    UnexpectedEnding,
-    LexError(TokenLexError)
-}
-
-pub enum TokenLexError {
+pub enum LexError {
     StringError(StringLiteralLexError),
     NonLexableSequence(String),
 }
@@ -83,7 +27,6 @@ pub enum HexSequenceError {
     NonHexChar,
     NonUtf8Sequence
 }
-
 
 /// Turns a sequence of HH into the character corresponding to that hexadecimal.
 /// Returns Err if the given iterator does not produce two characters (`NotEnoughChars`), if the two characters do not form a hex literal (`NonHexChar`), or if the hexadecimal number cannot be converted to a UTF-8 character (`NonUtf8Sequence`).
@@ -200,26 +143,19 @@ fn lex_string_literal(slice: &str) -> Result<(String, &str), StringLiteralLexErr
     Err(StringLiteralLexError::MissingClosingQuote)
 }
 
-fn regex_expect(regex: &str) -> Regex {
-    match Regex::new(regex) {
-        Ok(r) => r,
-        Err(e) => panic!(format!("Invalid regex '{}': {}", regex, e))
-    }
-}
-
 static ID_REGEX: Regex = regex_expect(r"^[a-zA-Z0-9\-_]+\b");
 
 static LITERAL_TOKENS: [(Regex, LexemeKind); 7] = [
     (regex_expect(r"^\("), LexemeKind::LParen),
     (regex_expect(r"^\)"), LexemeKind::RParen),
-    (regex_expect(r"=="), LexemeKind::Equals),
+    (regex_expect(r"^=="), LexemeKind::Equals),
     (regex_expect(r"^="), LexemeKind::Equals),
     (regex_expect(r"^is\b"), LexemeKind::Equals),
     (regex_expect(r"^and\b"), LexemeKind::And),
     (regex_expect(r"^or\b"), LexemeKind::Or)
 ];
 
-fn get_token(slice: &str) -> Result<(Lexeme, &str), TokenLexError> {
+fn get_token(slice: &str) -> Result<(Lexeme, &str), LexError> {
     let slice = slice.trim_start();
 
     for (re, kind) in &LITERAL_TOKENS {
@@ -235,7 +171,7 @@ fn get_token(slice: &str) -> Result<(Lexeme, &str), TokenLexError> {
     if slice.starts_with("'") || slice.starts_with("\"") {
         return match lex_string_literal(slice) {
             Ok(s) => Ok((Lexeme::new(s.0, LexemeKind::Value), s.1)),
-            Err(e) => Err(TokenLexError::StringError(e))
+            Err(e) => Err(LexError::StringError(e))
         };
     }
 
@@ -250,7 +186,7 @@ fn get_token(slice: &str) -> Result<(Lexeme, &str), TokenLexError> {
     Err(NonLexableSequence(slice.slice_until(char::is_whitespace).to_owned()))
 }
 
-pub fn lex(args: &[&str]) -> Result<Vec<Lexeme>, TokenLexError> {
+pub fn lex(args: &[&str]) -> Result<LexemeQueue, LexError> {
     let s: String = args.iter().map(|arg| {
         if arg.contains(" ") {
             "(".to_owned() + arg + ")"
@@ -261,7 +197,7 @@ pub fn lex(args: &[&str]) -> Result<Vec<Lexeme>, TokenLexError> {
     }).into_vec().join(" ");
 
     let mut slice = s.trim();
-    let mut ret = Vec::<Lexeme>::new();
+    let mut ret = LexemeQueue::new();
 
     while slice.len() > 0 {
         let (lexeme, s) = match get_token(slice) {
@@ -275,66 +211,4 @@ pub fn lex(args: &[&str]) -> Result<Vec<Lexeme>, TokenLexError> {
     }
 
     Ok(ret)
-}
-
-pub fn parse(args: &[&str]) -> Result<OrQuery, ParseError> {
-    let lexemes = lex(args);
-
-    None
-}
-
-fn peek(lexemes: &[Lexeme]) -> Option<&Lexeme> {
-    lexemes.get(0)
-}
-
-fn peek_kind(lexemes: &[Lexeme]) -> Option<LexemeKind> {
-    peek(lexemes).map(|x| x.kind)
-}
-
-fn pop(lexemes: &mut &[Lexeme]) -> Option<&Lexeme> {
-    let ret = match peek(lexemes) {
-        Some(s) => s,
-        None => return None
-    };
-
-    *lexemes = &lexemes[1..];
-    Some(ret)
-}
-
-pub fn parse_or_query(lexemes: &mut &[Lexeme]) -> Result<OrQuery, ParseError> {
-    let and_query = parse_and_query(lexemes)?;
-
-    Ok(OrQuery {
-        and_query,
-        next:
-        if peek_kind(lexemes) == LexemeKind::Or {
-            pop(lexemes);
-            Some(Box::new(parse_or_query(lexemes)?))
-        }
-        else {
-            None
-        }
-    })
-}
-
-pub fn parse_and_query(lexemes: &mut &[Lexeme]) -> Result<AndQuery, ParseError> {
-    let factor = parse_factor(lexemes)?
-
-    Ok(AndQuery {
-        factor,
-        next:
-        if peek_kind(lexemes) == LexemeKind::And {
-            pop(lexemes);
-            Some(Box::new(parse_and_query(lexemes)?))
-        }
-    })
-}
-
-pub fn parse_factor(lexemes: &mut &[Lexeme]) -> Result<Factor, ParseError> {
-
-}
-
-
-fn parse_expr(args: &mut Vec<String>) {
-
 }
