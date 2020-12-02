@@ -11,6 +11,7 @@ mod filesystem;
 mod functional;
 mod linq;
 mod os;
+mod collections;
 
 fn main() {
     println!("Hello, world!");
