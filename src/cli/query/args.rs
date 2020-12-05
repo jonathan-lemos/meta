@@ -1,13 +1,39 @@
 use crate::linq::collectors::IntoVec;
-use std::ops::Index;
+use std::ops::{Index, Range};
 use std::slice::Iter;
+use std::iter::{Peekable, Fuse};
 
 pub struct Args {
     args: Vec<(String, usize)>,
     cmdline: String
 }
 
-pub type ArgsIter<'a> = Iter<'a, (String, usize)>;
+pub struct ArgsIter<'a> {
+    iter: Peekable<Fuse<Iter<'a, (String, usize)>>>,
+    index: usize,
+}
+
+impl ArgsIter {
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    fn peek(&mut self) -> Option<&Self::Item> {
+        self.iter.peek()
+    }
+}
+
+impl Iterator for ArgsIter {
+    type Item = (String, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|x| {
+            self.index += 1;
+            x
+        })
+    }
+}
+
 
 impl Args {
     pub fn new(a: &[&str]) -> Self {
@@ -36,7 +62,7 @@ impl Args {
     }
 
     pub fn iter(&self) -> ArgsIter {
-        self.args.iter()
+        ArgsIter{iter: self.args.iter().fuse().peekable(), index: 0}
     }
 
     pub fn cmdline(&self) -> &str {
@@ -45,9 +71,9 @@ impl Args {
 }
 
 impl Index<usize> for Args {
-    type Output = String;
+    type Output = (String, usize);
 
     fn index(&self, arg: usize) -> &Self::Output {
-        &self.args[arg].0
+        &self.args[arg]
     }
 }

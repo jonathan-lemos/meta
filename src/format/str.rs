@@ -1,5 +1,6 @@
 use std::iter::Fuse;
 use std::str::Chars;
+use std::ops::Mul;
 
 pub struct CharIterator<'a> {
     iter: Fuse<Chars<'a>>,
@@ -60,6 +61,22 @@ pub trait StrExtensions {
     fn slice_offset_bytes(&self, inner: &str) -> Option<usize>;
 
     fn slice_offset_chars(&self, inner: &str) -> Option<usize>;
+
+    fn col_begin_end(&self, begin: usize, end: usize) -> String;
+
+    fn col_begin_end_indent(&self, begin: usize, end: Option<usize>) -> String;
+}
+
+impl Mul<usize> for &str {
+    type Output = String;
+
+    fn mul(self, rhs: usize) -> Self::Output {
+        let mut ret = self.to_owned();
+        for _ in 0..rhs {
+            ret += self.clone();
+        }
+        ret
+    }
 }
 
 impl StrExtensions for &str {
@@ -106,7 +123,7 @@ impl StrExtensions for &str {
         };
 
         if ob == 0 {
-            return 0
+            return Some(0)
         }
 
         let iter = self.char_iterator();
@@ -121,6 +138,56 @@ impl StrExtensions for &str {
         }
 
         None
+    }
+
+    fn col_begin_end(&self, begin: usize, end: Option<usize>) -> String {
+        let spacer = " " * begin;
+        let mut ret = String::new();
+        let mut index = begin;
+
+        if let Some(e) = end {
+            // 'if let Some(e) = end && begin >= e' is "experimental"
+            if begin >= e {
+                return self.to_string();
+            }
+        }
+
+        // todo?: hyphenator
+        for line in self.split("\n") {
+            if let Some(e) = end {
+                for word in line.split_whitespace() {
+                    if word.len() + index > e {
+                        match index {
+                            x if x == begin => {
+                                ret += word;
+                                ret += "\n";
+                            }
+                            _ => {
+                                ret += "\n";
+                                ret += &spacer;
+                                ret += word;
+                            }
+                        }
+                    }
+                    else {
+                        ret += word;
+                    }
+                }
+            }
+            else {
+                ret += line;
+            }
+
+            ret += "\n";
+            ret += &spacer;
+        }
+        ret.trim().to_owned()
+    }
+
+    fn col_begin_end_indent(&self, begin: usize, end: Option<usize>) -> String {
+        let spacer = " " * begin;
+
+        (spacer + self).col_begin_end(begin, end)
     }
 }
 

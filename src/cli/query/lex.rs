@@ -1,4 +1,4 @@
-use regex::Regex;
+use fancy_regex::Regex;
 use std::convert::TryFrom;
 
 use crate::format::re::regex_expect;
@@ -99,53 +99,11 @@ fn u_sequence_to_char<I: Iterator<Item=char>>(mut iter: &mut I) -> Result<char, 
     }
 }
 
-fn lex_string_literal(slice: &str) -> Result<(String, &str), StringLiteralLexError> {
-    debug_assert!(slice.starts_with("'") || slice.starts_with("\""));
+static ID_REGEX: &Regex = regex_expect(r"^[a-zA-Z0-9\-_]+\b");
 
-    let mut iter = slice.char_iterator();
+static QUOTE_REGEX: &Regex = regex_expect(r#"^("|').*?(?<!\)\1"#);
 
-    let opening_quote = iter.next().unwrap();
-    let mut ret = opening_quote.to_string();
-
-    for c in iter {
-        ret.push(if c == '\\' {
-            match iter.next() {
-                Some('n') => '\n',
-                Some('r') => '\r',
-                Some('\t') => '\t',
-                Some('\\') => '\\',
-                Some('\'') => '\'',
-                Some('"') => '"',
-                Some('x') => {
-                    match x_sequence_to_char(&mut iter) {
-                        Ok(c) => c,
-                        Err(e) => return Err(StringLiteralLexError::HexSequenceError(e))
-                    }
-                },
-                Some('u') => {
-                    match u_sequence_to_char(&mut iter) {
-                        Ok(c) => c,
-                        Err(e) => return Err(StringLiteralLexError::HexSequenceError(e))
-                    }
-                },
-                Some(c) => c,
-                None => return Err(StringLiteralLexError::EndingEscape)
-            }
-        } else {
-            if c == opening_quote {
-                ret.push(c);
-                return Ok((ret, &slice[..iter.position_bytes()]));
-            }
-            c
-        });
-    }
-
-    Err(StringLiteralLexError::MissingClosingQuote)
-}
-
-static ID_REGEX: Regex = regex_expect(r"^[a-zA-Z0-9\-_]+\b");
-
-static LITERAL_TOKENS: [(Regex, LexemeKind); 7] = [
+static LITERAL_TOKENS: [(&Regex, LexemeKind); 7] = [
     (regex_expect(r"^\("), LexemeKind::LParen),
     (regex_expect(r"^\)"), LexemeKind::RParen),
     (regex_expect(r"^=="), LexemeKind::Equals),
@@ -163,12 +121,14 @@ fn get_token(slice: &str) -> Result<(Lexeme, &str), LexError> {
             debug_assert_eq!(m.start(), 0);
 
             return Ok(
-                (Lexeme::new(m.as_str().to_owned(), *kind), &slice[m.end()..])
+                (Lexeme::new(m.as_str(), *kind), &slice[m.end()..])
             );
         }
     }
 
     if slice.starts_with("'") || slice.starts_with("\"") {
+
+
         return match lex_string_literal(slice) {
             Ok(s) => Ok((Lexeme::new(s.0, LexemeKind::Value), s.1)),
             Err(e) => Err(LexError::StringError(e))
@@ -179,7 +139,7 @@ fn get_token(slice: &str) -> Result<(Lexeme, &str), LexError> {
         debug_assert_eq!(m.start(), 0);
 
         return Ok (
-            (Lexeme::new(m.as_str().to_owned(), LexemeKind::Identifier), &slice[m.end()..])
+            (Lexeme::new(m.as_str(), LexemeKind::Identifier), &slice[m.end()..])
         );
     }
 
