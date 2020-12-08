@@ -35,12 +35,6 @@ impl<'a, 'b> LexemeQueue<'a, 'b> {
         LexemeQueue { lexemes: VecDeque::new() }
     }
 
-    pub fn from_args_iter(iter: ArgsIter) {
-        let ret = Self::new();
-        let mut sizes = Vec::<usize>::new();
-
-    }
-
     pub fn push(&mut self, lexeme: Lexeme<'a, 'b>) {
         self.lexemes.push_back(lexeme);
     }

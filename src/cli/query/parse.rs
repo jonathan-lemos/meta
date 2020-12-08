@@ -19,6 +19,7 @@ use crate::cli::query::parse::LexError::NonLexableSequence;
 use std::mem::take;
 use crate::cli::query::parse::Factor::KeyEqualsValue;
 use crate::cli::query::lex::LexError;
+use crate::cli::query::lexeme::LexemeQueue;
 
 pub struct OrQuery {
     and_query: AndQuery,
@@ -46,38 +47,6 @@ pub fn parse(args: &[&str]) -> Result<OrQuery, ParseError> {
     let lexemes = lex(args);
 
     None
-}
-
-fn peek(lexemes: &[Lexeme]) -> Option<&Lexeme> {
-    lexemes.get(0)
-}
-
-fn peek_kind(lexemes: &[Lexeme]) -> Option<LexemeKind> {
-    peek(lexemes).map(|x| x.kind)
-}
-
-fn pop(lexemes: &mut &[Lexeme]) -> Option<&Lexeme> {
-    let ret = match peek(lexemes) {
-        Some(s) => s,
-        None => return None
-    };
-
-    *lexemes = &lexemes[1..];
-    Some(ret)
-}
-
-fn pop_kind(lexemes: &mut &[Lexeme], kind: &Vec<LexemeKind>) -> Result<&Lexeme, ParseError> {
-    match pop(lexemes) {
-        Some(s) => {
-            for k in kind {
-                if s.kind == k {
-                    return Ok(s);
-                }
-            }
-            return Err(ParseError::UnexpectedToken(s.clone(), kind.clone()))
-        }
-        None => Err(ParseError::UnexpectedEnding(kind.clone()))
-    }
 }
 
 pub fn parse_or_query(lexemes: &mut &[Lexeme]) -> Result<OrQuery, ParseError> {

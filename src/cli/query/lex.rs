@@ -9,17 +9,16 @@ use super::lexeme::{LexemeQueue, LexemeKind, Lexeme};
 use self::LexError::*;
 use self::StringLiteralLexError::*;
 use self::HexSequenceError::*;
+use crate::cli::query::args::ArgsIter;
 
 pub enum LexError {
     StringError(StringLiteralLexError),
-    NonLexableSequence(String),
+    NonLexableSequence,
 }
 
 pub enum StringLiteralLexError {
     MissingClosingQuote,
-    EndingEscape,
-    UnknownEscape(String),
-    HexSequenceError(HexSequenceError)
+    SyntaxError(usize)
 }
 
 pub enum HexSequenceError {
@@ -28,80 +27,29 @@ pub enum HexSequenceError {
     NonUtf8Sequence
 }
 
-/// Turns a sequence of HH into the character corresponding to that hexadecimal.
-/// Returns Err if the given iterator does not produce two characters (`NotEnoughChars`), if the two characters do not form a hex literal (`NonHexChar`), or if the hexadecimal number cannot be converted to a UTF-8 character (`NonUtf8Sequence`).
-///
-/// Meant for use with lex_string_literal()
-///
-/// # Arguments
-///
-/// * `iter` - An iterator of characters. This must be fused, meaning once it produces None, it must continue producing None.
-///
-/// # Examples
-/// ```
-/// assert_eq!(x_sequence_to_char(['B', '8'].iter()), Ok('\xB8'));
-/// assert_eq!(x_sequence_to_char(['b', '8'].iter()), Ok('\xB8'));
-/// assert_eq!(x_sequence_to_char(['b', '8', 'q'].iter()), Ok('\xB8'));
-/// assert_eq!(x_sequence_to_char(['b'].iter()), Err(NotEnoughChars));
-/// assert_eq!(x_sequence_to_char(['b', 'r'].iter()), Err(NonHexChar));
-/// ```
-fn x_sequence_to_char<I: Iterator<Item=char>>(mut iter: I) -> Result<char, HexSequenceError> {
-    match (iter.next(), iter.next()) {
-        (_, None) => Err(NotEnoughChars),
-        (Some(a), Some(b)) => {
-            let s = [a, b].iter().collect::<String>();
+fn lex_string_literal(slice: &str) -> Result<usize, StringLiteralLexError> {
+    use serde_json::Error::*;
 
-            let n = match u8::from_str_radix(&s, 16) {
-                Ok(n) => n,
-                Err(_) => return Err(NonHexChar)
-            };
+    static QUOTE_REGEX: &Regex = regex_expect(r#"^("|').*?(?<!\)\1"#);
 
-            Ok(char::from(n))
-        }
-        _ => {panic!("Iterator passed to x_sequence_to_char() was not fuse()'d. This is a bug.")}
+    let quot = match QUOTE_REGEX.find(slice)
+        .expect("QUOTE_REGEX is invalid") {
+        Some(s) => s,
+        None => return Err(MissingClosingQuote)
+    };
+
+    if quot.start() != 0 {
+        return Err(SyntaxError(0))
     }
-}
 
-/// Turns a sequence of HHHH into the character corresponding to that hexadecimal.
-/// Returns Err if the given iterator does not produce two characters (`NotEnoughChars`), if the two characters do not form a hex literal (`NonHexChar`), or if the hexadecimal number cannot be converted to a UTF-8 character (`NonUtf8Sequence`)
-///
-/// Meant for use with lex_string_literal()
-///
-/// # Arguments
-///
-/// * `iter` - An iterator of characters. This must be fused, meaning once it produces None, it must continue producing None.
-///
-/// # Examples
-/// ```
-/// assert_eq!(u_sequence_to_char(['B', '8', '0', 'F'].iter()), Ok('\uB80F'));
-/// assert_eq!(u_sequence_to_char(['b', '8', '0', 'f'].iter()), Ok('\xB80F'));
-/// assert_eq!(u_sequence_to_char(['b', '8', '0', 'f', 'q'].iter()), Ok('\xB80F'));
-/// assert_eq!(u_sequence_to_char(['b', '8', '0'].iter()), Err(NotEnoughChars));
-/// assert_eq!(u_sequence_to_char(['b', '8', '0', 'r'].iter()), Err(NonHexChar));
-/// ```
-fn u_sequence_to_char<I: Iterator<Item=char>>(mut iter: &mut I) -> Result<char, HexSequenceError> {
-    match (iter.next(), iter.next(), iter.next(), iter.next()) {
-        (_, _, _, None) => Err(NotEnoughChars),
-        (Some(a), Some(b), Some(c), Some(d)) => {
-            let s = [a, b, c, d].iter().collect::<String>();
-
-            let n = match u32::from_str_radix(&s, 16) {
-                Ok(n) => n,
-                Err(_) => return Err(NonHexChar)
-            };
-
-            match char::try_from(n) {
-                Ok(c) => Ok(c),
-                Err(_) => Err(NotEnoughChars)
-            }
-        }
-        _ => {panic!("Iterator passed to u_sequence_to_char() was not fuse()'d. This is a bug.")}
+    match serde_json::from_str(&slice[0..quot.end()]) {
+        Ok(s) => Ok(quot.end()),
+        Err(e) => Err(SyntaxError(e.column()))
     }
 }
 
 static ID_REGEX: &Regex = regex_expect(r"^[a-zA-Z0-9\-_]+\b");
 
-static QUOTE_REGEX: &Regex = regex_expect(r#"^("|').*?(?<!\)\1"#);
 
 static LITERAL_TOKENS: [(&Regex, LexemeKind); 7] = [
     (regex_expect(r"^\("), LexemeKind::LParen),
@@ -113,24 +61,20 @@ static LITERAL_TOKENS: [(&Regex, LexemeKind); 7] = [
     (regex_expect(r"^or\b"), LexemeKind::Or)
 ];
 
-fn get_token(slice: &str) -> Result<(Lexeme, &str), LexError> {
+fn get_token(slice: &str) -> Result<(usize, LexemeKind), LexError> {
     let slice = slice.trim_start();
 
     for (re, kind) in &LITERAL_TOKENS {
         if let Some(m) = re.find(slice) {
             debug_assert_eq!(m.start(), 0);
 
-            return Ok(
-                (Lexeme::new(m.as_str(), *kind), &slice[m.end()..])
-            );
+            return Ok((m.end(), *kind));
         }
     }
 
     if slice.starts_with("'") || slice.starts_with("\"") {
-
-
         return match lex_string_literal(slice) {
-            Ok(s) => Ok((Lexeme::new(s.0, LexemeKind::Value), s.1)),
+            Ok(s) => Ok((s, LexemeKind::Value)),
             Err(e) => Err(LexError::StringError(e))
         };
     }
@@ -138,36 +82,35 @@ fn get_token(slice: &str) -> Result<(Lexeme, &str), LexError> {
     if let Some(m) = ID_REGEX.find(slice) {
         debug_assert_eq!(m.start(), 0);
 
-        return Ok (
-            (Lexeme::new(m.as_str(), LexemeKind::Identifier), &slice[m.end()..])
-        );
+        return Ok ((m.end(), LexemeKind::Identifier));
     }
 
-    Err(NonLexableSequence(slice.slice_until(char::is_whitespace).to_owned()))
+    Err(NonLexableSequence)
 }
 
-pub fn lex(args: &[&str]) -> Result<LexemeQueue, LexError> {
-    let s: String = args.iter().map(|arg| {
+pub fn lex(args: ArgsIter, cmdline: &str) -> Result<LexemeQueue, LexError> {
+    let a = args.flat_map(|(arg, index)| {
         if arg.contains(" ") {
-            "(".to_owned() + arg + ")"
+            [("(", index), (arg, index), (")", index + arg.len() - 1)]
         }
         else {
-            (*arg).to_owned()
+            [(arg, index)]
         }
-    }).into_vec().join(" ");
+    }).collect::<Vec<(String, usize)>>();
 
-    let mut slice = s.trim();
     let mut ret = LexemeQueue::new();
 
-    while slice.len() > 0 {
-        let (lexeme, s) = match get_token(slice) {
-            Ok(l) => l,
-            Err(e) => return Err(e)
-        };
+    for (arg, index) in &a {
+        let slice = arg.trim();
 
-        ret.push(lexeme);
-
-        slice = s.trim_start();
+        while slice.len() > 0 {
+            let tup = get_token(slice)?;
+            ret.push(Lexeme::new(
+                &slice[..tup.0],
+                tup.1,
+                (&cmdline[index + tup.0..]).slice_until(|c| c.is_whitespace()))
+            );
+        }
     }
 
     Ok(ret)
