@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
-use crate::linq::collectors::IntoVec;
+
 use crate::cli::query::args::ArgsIter;
+use crate::linq::collectors::IntoVec;
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Lexeme<'a, 'b> {
@@ -11,7 +12,19 @@ pub struct Lexeme<'a, 'b> {
 
 impl<'a, 'b> Lexeme<'a, 'b> {
     pub fn new(token: &'a str, kind: LexemeKind, cmdline_ptr: &'b str) -> Self {
-        Lexeme {token, kind, cmdline_ptr}
+        Lexeme { token, kind, cmdline_ptr }
+    }
+
+    pub fn token(&self) -> &str {
+        self.token
+    }
+
+    pub fn kind(&self) -> LexemeKind {
+        self.kind
+    }
+
+    pub fn cmdline(&self) -> &str {
+        self.cmdline_ptr
     }
 }
 
@@ -19,11 +32,19 @@ impl<'a, 'b> Lexeme<'a, 'b> {
 pub enum LexemeKind {
     LParen,
     RParen,
-    Equals,
+    Equals(EqualityKind),
     Or,
     And,
-    Identifier,
-    Value
+    Key,
+    Value,
+    In,
+    Comma,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum EqualityKind {
+    Strict,
+    Matches,
 }
 
 pub struct LexemeQueue<'a, 'b> {
@@ -35,16 +56,20 @@ impl<'a, 'b> LexemeQueue<'a, 'b> {
         LexemeQueue { lexemes: VecDeque::new() }
     }
 
-    pub fn push(&mut self, lexeme: Lexeme<'a, 'b>) {
-        self.lexemes.push_back(lexeme);
+    pub fn len(&self) -> usize {
+        self.lexemes.len()
+    }
+
+    pub fn peek(&self) -> Option<&Lexeme<'a, 'b>> {
+        self.lexemes.get(0)
     }
 
     pub fn pop(&mut self) -> Option<Lexeme<'a, 'b>> {
         self.lexemes.pop_front()
     }
 
-    pub fn peek(&self) -> Option<&Lexeme<'a, 'b>> {
-        self.lexemes.get(0)
+    pub fn pop_kind(&mut self, kind: LexemeKind) -> Option<Lexeme<'a, 'b>> {
+        self.pop_predicate(|l| l.kind() == kind)
     }
 
     pub fn pop_predicate<F: FnOnce(&Lexeme<'a, 'b>) -> bool>(&mut self, predicate: F) -> Option<Lexeme<'a, 'b>> {
@@ -53,7 +78,7 @@ impl<'a, 'b> LexemeQueue<'a, 'b> {
 
     pub fn pop_sequence(&mut self, n: usize) -> Option<Vec<Lexeme<'a, 'b>>> {
         if self.lexemes.len() < n {
-            return None
+            return None;
         }
 
         (0..n).map(|_| self.lexemes.pop_front().unwrap()).collect()
@@ -61,10 +86,14 @@ impl<'a, 'b> LexemeQueue<'a, 'b> {
 
     pub fn pop_sequence_predicate<F: FnOnce(&[&Lexeme<'a, 'b>]) -> bool>(&mut self, n: usize, predicate: F) -> Option<Vec<Lexeme<'a, 'b>>> {
         if self.lexemes.len() < n {
-            return None
+            return None;
         }
 
         let seq = (0..n).map(|i| self.lexemes.get(i).unwrap()).into_vec();
         if predicate(&seq[..]) { self.pop_sequence(n) } else { None }
+    }
+
+    pub fn push(&mut self, lexeme: Lexeme<'a, 'b>) {
+        self.lexemes.push_back(lexeme);
     }
 }

@@ -3,7 +3,7 @@ use std::slice::Iter;
 
 #[derive(Deserialize)]
 struct CargoToml {
-    package: Package;
+    package: Package
 }
 
 #[derive(Deserialize)]

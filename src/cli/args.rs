@@ -7,6 +7,7 @@ use crate::format::re::regex_expect;
 use regex::Regex;
 use crate::cli::program::{program_name, authors, version, description};
 use crate::format::str::StrExtensions;
+use fancy_regex::Regex;
 
 pub struct Options {
     subcommand: String

@@ -3,12 +3,12 @@
 ///
 /// or-query -> and-query or or-query | and-query
 /// and-query -> factor and and-query | factor
-/// factor -> ( query ) | key | key is value // (command-line arguments in quotes e.g. 'this and that' are treated as being in parentheses)
+/// factor -> ( or-query ) | key | key equals value | key in ( values ) // (command-line arguments in quotes e.g. 'this and that' are treated as being in parentheses)
 /// key -> [a-zA-Z0-9\-_]+
-/// eq -> == | =
-/// value -> quotation | string
-/// quotation -> "quote" | 'quote' (usual quote syntax)
-/// string -> .* (single line)
+/// equals -> = | == | is | matches
+/// values -> value values | value , values | value
+/// value -> key | quotation
+/// quotation -> [[json quote]]
 
 use crate::linq::collectors::IntoVec;
 use std::convert::TryFrom;
@@ -18,8 +18,8 @@ use crate::format::str::{ToCharIterator, StrExtensions};
 use crate::cli::query::parse::LexError::NonLexableSequence;
 use std::mem::take;
 use crate::cli::query::parse::Factor::KeyEqualsValue;
-use crate::cli::query::lex::LexError;
-use crate::cli::query::lexeme::LexemeQueue;
+use crate::cli::query::lex::{LexError, lex};
+use crate::cli::query::lexeme::{LexemeQueue, LexemeKind, Lexeme, EqualityKind};
 
 pub struct OrQuery {
     and_query: AndQuery,
@@ -34,29 +34,33 @@ pub struct AndQuery {
 pub enum Factor {
     Query(Box<OrQuery>),
     Key(String),
-    KeyEqualsValue((String, String))
+    KeyEqualsValue((String, EqualityKind, String)),
+    KeyIn((String, Vec<String>))
 }
 
-pub enum ParseError {
+pub enum ParseError<'a, 'b> {
     UnexpectedEOF(String),
-    InvalidSequence(String),
-    LexError(LexError)
+    UnexpectedToken((Lexeme<'a, 'b>, String)),
+    TrailingToken(Lexeme<'a, 'b>)
 }
 
-pub fn parse(args: &[&str]) -> Result<OrQuery, ParseError> {
-    let lexemes = lex(args);
+pub fn parse(lexemes: &mut LexemeQueue) -> Result<OrQuery, ParseError> {
+    let or_query = parse_or_query(lexemes)?;
 
-    None
+    if let Some(s) = lexemes.peek() {
+        return Err(ParseError::TrailingToken(s.clone()))
+    }
+
+    Ok(or_query)
 }
 
-pub fn parse_or_query(lexemes: &mut &[Lexeme]) -> Result<OrQuery, ParseError> {
+pub fn parse_or_query(lexemes: &mut LexemeQueue) -> Result<OrQuery, ParseError> {
     let and_query = parse_and_query(lexemes)?;
 
     Ok(OrQuery {
         and_query,
         next:
-        if peek_kind(lexemes) == LexemeKind::Or {
-            pop(lexemes);
+        if let Some(s) = lexemes.pop_kind(LexemeKind::Or) {
             Some(Box::new(parse_or_query(lexemes)?))
         }
         else {
@@ -65,14 +69,13 @@ pub fn parse_or_query(lexemes: &mut &[Lexeme]) -> Result<OrQuery, ParseError> {
     })
 }
 
-pub fn parse_and_query(lexemes: &mut &[Lexeme]) -> Result<AndQuery, ParseError> {
-    let factor = parse_factor(lexemes)?
+pub fn parse_and_query(lexemes: &mut LexemeQueue) -> Result<AndQuery, ParseError> {
+    let factor = parse_factor(lexemes)?;
 
     Ok(AndQuery {
         factor,
         next:
-        if peek_kind(lexemes) == LexemeKind::And {
-            pop(lexemes);
+        if let Some(s) = lexemes.pop_kind(LexemeKind::And) {
             Some(Box::new(parse_and_query(lexemes)?))
         }
         else {
@@ -81,38 +84,87 @@ pub fn parse_and_query(lexemes: &mut &[Lexeme]) -> Result<AndQuery, ParseError> 
     })
 }
 
-pub fn parse_factor(lexemes: &mut &[Lexeme]) -> Result<Factor, ParseError> {
-    let tok = match pop(lexemes) {
+pub fn parse_factor(lexemes: &mut LexemeQueue) -> Result<Factor, ParseError> {
+    let tok = match lexemes.pop() {
         Some(t) => t,
-        None => ParseError::UnexpectedEnding(vec!(LexemeKind::LParen, LexemeKind::Equals))
+        None => return Err(ParseError::UnexpectedEOF("Expected a key or a subquery, but no more arguments were available. Most likely you forgot to fill in the right half of an 'and' or 'or' query.".to_owned()))
     };
 
-    match tok.kind {
+    match tok.kind() {
         LexemeKind::LParen => {
             let expr = parse_or_query(lexemes)?;
-            pop_kind(lexemes, &vec![LexemeKind::RParen])?;
-            return Ok(Factor::Query(Box::new(expr)));
+
+            let rparen = lexemes.pop();
+            match rparen {
+                Some(s) => {
+                    if s.kind() != LexemeKind::RParen {
+                        return Err(ParseError::UnexpectedEOF(("Expected a ')'. Most likely you forgot to include a closing ')'".to_owned())))
+                    }
+                    Ok(Factor::Query(Box::new(expr)))
+                }
+                None => Err(ParseError::UnexpectedToken((tok, "Expected a ')'. Most likely you forgot to include a closing ')'".to_owned())))
+            }
         },
-        LexemeKind::Identifier => {
-            let next = match pop(lexemes) {
+        LexemeKind::Key => {
+            let next = match lexemes.pop() {
                 Some(s) => s,
-                None => return Err(ParseError::UnexpectedEnding(vec![LexemeKind::Equals, LexemeKind::Value, LexemeKind::Identifier]))
+                None => return Ok(Factor::Key(tok.token().to_owned()))
             };
 
-            match next.kind {
-                LexemeKind::Value | LexemeKind::Identifier => {
-                    Ok(Factor::KeyEqualsValue((tok.str, next.str)))
+            match next.kind() {
+                LexemeKind::In => {
+                    let lparen = lexemes.pop();
+                    match lparen {
+                        Some(s) => {
+                            if s.kind() != LexemeKind::LParen {
+                                return Err(ParseError::UnexpectedToken((s, "Expected '(' after 'in'".to_owned())))
+                            }
+                        }
+                        None => return Err(ParseError::UnexpectedEOF("Expected ')' after 'in'. Most likely you have an extra trailing 'in'.".to_owned()))
+                    }
+
+                    let values = parse_values(lexemes)?;
+
+                    lexemes.pop_kind(LexemeKind::Comma);
+
+                    let rparen = lexemes.pop();
+                    match rparen {
+                        Some(s) => {
+                            if s.kind() != LexemeKind::RParen {
+                                return Err(ParseError::UnexpectedToken((s, "Expected ')' to close the 'in' values. Most likely you forgot to include the closing ')'.".to_owned())))
+                            }
+                        }
+                        None => return Err(ParseError::UnexpectedEOF("Expected ')' to close the 'in' values. Most likely you forgot to include the closing ')'.".to_owned()))
+                    }
+
+                    Ok(Factor::KeyIn((tok.token().to_owned(), values)))
                 }
-                LexemeKind::Equals => {
-                    let val = pop_kind(lexemes, LexemeKind::Value | LexemeKind::Identifier)?;
-                    Ok(Factor(KeyEqualsValue((tok.str, next.str))))
-                }
+                LexemeKind::Equals(e) => {
+                    let val = lexemes.pop();
+                    match val {
+                        Some(s) => {
+                            if s.kind() != LexemeKind::Key && s.kind() != LexemeKind::Value {
+                                return Err(ParseError::UnexpectedToken((s, "Expected a key or a value.".to_owned())))
+                            }
+                        }
+                        None => return Err(ParseError::UnexpectedEOF(format!("Expected a value after '{}'.", next.token())))
+                    }
+                    Ok(Factor(KeyEqualsValue((tok.token().to_owned(), e, val.token().to_owned()))))
+                },
+                _ => Err(ParseError::UnexpectedToken((next, "Expected 'in', '=', '==', or 'matches'.".to_owned())))
             }
         }
+        _ => Err(ParseError::UnexpectedToken((tok, "Expected '(' or a key.".to_owned())))
     }
 }
 
+pub fn parse_values(lexemes: &mut LexemeQueue) -> Result<Vec<String>, ParseError> {
+    let mut ret = Vec::new();
 
-fn parse_expr(args: &mut Vec<String>) {
+    while let Some(s) = lexemes.pop_predicate(|l| l.kind() == LexemeKind::Key || l.kind() == LexemeKind::Value) {
+        ret.add(s.token().to_owned());
+        lexemes.pop_kind(LexemeKind::Comma);
+    }
 
+    Ok(ret)
 }
