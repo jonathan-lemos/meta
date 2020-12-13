@@ -12,14 +12,12 @@
 
 use crate::linq::collectors::IntoVec;
 use std::convert::TryFrom;
-use crate::cli::query::parse::HexSequenceError::{NotEnoughChars, NonHexChar, NonUtf8Sequence};
-use regex::Regex;
 use crate::format::str::{ToCharIterator, StrExtensions};
 use crate::cli::query::parse::LexError::NonLexableSequence;
 use std::mem::take;
 use crate::cli::query::parse::Factor::KeyEqualsValue;
 use crate::cli::query::lex::{LexError, lex};
-use crate::cli::query::lexeme::{LexemeQueue, LexemeKind, Lexeme, EqualityKind};
+use crate::cli::query::lexeme::{LexemeQueue, LexemeKind, Lexeme, EqualityKind, OwnedLexeme};
 
 pub struct OrQuery {
     and_query: AndQuery,
@@ -38,17 +36,17 @@ pub enum Factor {
     KeyIn((String, Vec<String>))
 }
 
-pub enum ParseError<'a, 'b> {
+pub enum ParseError {
     UnexpectedEOF(String),
-    UnexpectedToken((Lexeme<'a, 'b>, String)),
-    TrailingToken(Lexeme<'a, 'b>)
+    UnexpectedToken((OwnedLexeme, String)),
+    TrailingToken(OwnedLexeme)
 }
 
 pub fn parse(lexemes: &mut LexemeQueue) -> Result<OrQuery, ParseError> {
     let or_query = parse_or_query(lexemes)?;
 
     if let Some(s) = lexemes.peek() {
-        return Err(ParseError::TrailingToken(s.clone()))
+        return Err(ParseError::TrailingToken(s.to_owned()))
     }
 
     Ok(or_query)
@@ -102,7 +100,7 @@ pub fn parse_factor(lexemes: &mut LexemeQueue) -> Result<Factor, ParseError> {
                     }
                     Ok(Factor::Query(Box::new(expr)))
                 }
-                None => Err(ParseError::UnexpectedToken((tok, "Expected a ')'. Most likely you forgot to include a closing ')'".to_owned())))
+                None => Err(ParseError::UnexpectedToken((tok.to_owned(), "Expected a ')'. Most likely you forgot to include a closing ')'".to_owned())))
             }
         },
         LexemeKind::Key => {
@@ -117,7 +115,7 @@ pub fn parse_factor(lexemes: &mut LexemeQueue) -> Result<Factor, ParseError> {
                     match lparen {
                         Some(s) => {
                             if s.kind() != LexemeKind::LParen {
-                                return Err(ParseError::UnexpectedToken((s, "Expected '(' after 'in'".to_owned())))
+                                return Err(ParseError::UnexpectedToken((s.to_owned(), "Expected '(' after 'in'".to_owned())))
                             }
                         }
                         None => return Err(ParseError::UnexpectedEOF("Expected ')' after 'in'. Most likely you have an extra trailing 'in'.".to_owned()))
@@ -131,7 +129,7 @@ pub fn parse_factor(lexemes: &mut LexemeQueue) -> Result<Factor, ParseError> {
                     match rparen {
                         Some(s) => {
                             if s.kind() != LexemeKind::RParen {
-                                return Err(ParseError::UnexpectedToken((s, "Expected ')' to close the 'in' values. Most likely you forgot to include the closing ')'.".to_owned())))
+                                return Err(ParseError::UnexpectedToken((s.to_owned(), "Expected ')' to close the 'in' values. Most likely you forgot to include the closing ')'.".to_owned())))
                             }
                         }
                         None => return Err(ParseError::UnexpectedEOF("Expected ')' to close the 'in' values. Most likely you forgot to include the closing ')'.".to_owned()))
@@ -144,21 +142,21 @@ pub fn parse_factor(lexemes: &mut LexemeQueue) -> Result<Factor, ParseError> {
                     match val {
                         Some(s) => {
                             if s.kind() != LexemeKind::Key && s.kind() != LexemeKind::Value {
-                                return Err(ParseError::UnexpectedToken((s, "Expected a key or a value.".to_owned())))
+                                return Err(ParseError::UnexpectedToken((s.to_owned(), "Expected a key or a value.".to_owned())))
                             }
                         }
                         None => return Err(ParseError::UnexpectedEOF(format!("Expected a value after '{}'.", next.token())))
                     }
-                    Ok(Factor(KeyEqualsValue((tok.token().to_owned(), e, val.token().to_owned()))))
+                    Ok(Factor::KeyEqualsValue((tok.token().to_owned(), e, val.token().to_owned())))
                 },
-                _ => Err(ParseError::UnexpectedToken((next, "Expected 'in', '=', '==', or 'matches'.".to_owned())))
+                _ => Err(ParseError::UnexpectedToken((next.to_owned(), "Expected 'in', '=', '==', or 'matches'.".to_owned())))
             }
         }
-        _ => Err(ParseError::UnexpectedToken((tok, "Expected '(' or a key.".to_owned())))
+        _ => Err(ParseError::UnexpectedToken((tok.to_owned(), "Expected '(' or a key.".to_owned())))
     }
 }
 
-pub fn parse_values(lexemes: &mut LexemeQueue) -> Result<Vec<String>, ParseError> {
+pub fn parse_values(lexemes: &mut LexemeQueue) -> Vec<String> {
     let mut ret = Vec::new();
 
     while let Some(s) = lexemes.pop_predicate(|l| l.kind() == LexemeKind::Key || l.kind() == LexemeKind::Value) {
@@ -166,5 +164,5 @@ pub fn parse_values(lexemes: &mut LexemeQueue) -> Result<Vec<String>, ParseError
         lexemes.pop_kind(LexemeKind::Comma);
     }
 
-    Ok(ret)
+    ret
 }

@@ -4,15 +4,37 @@ use crate::cli::query::args::ArgsIter;
 use crate::linq::collectors::IntoVec;
 
 #[derive(Debug, Eq, PartialEq, Clone)]
+pub struct OwnedLexeme {
+    pub token: String,
+    pub kind: LexemeKind,
+    pub cmdline: String,
+    pub cmdline_index: usize
+}
+
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Lexeme<'a, 'b> {
     token: &'a str,
     kind: LexemeKind,
     cmdline_ptr: &'b str,
+    cmdline_index: usize
+}
+
+impl<'a, 'b> ToOwned for Lexeme<'a, 'b> {
+    type Owned = OwnedLexeme;
+
+    fn to_owned(&self) -> Self::Owned {
+        OwnedLexeme {
+            token: self.token.to_owned(),
+            kind: self.kind,
+            cmdline: self.cmdline_ptr.to_owned(),
+            cmdline_index: self.cmdline_index
+        }
+    }
 }
 
 impl<'a, 'b> Lexeme<'a, 'b> {
-    pub fn new(token: &'a str, kind: LexemeKind, cmdline_ptr: &'b str) -> Self {
-        Lexeme { token, kind, cmdline_ptr }
+    pub fn new(token: &'a str, kind: LexemeKind, cmdline_ptr: &'b str, cmdline_index: usize) -> Self {
+        Lexeme { token, kind, cmdline_ptr, cmdline_index }
     }
 
     pub fn token(&self) -> &str {

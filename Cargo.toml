@@ -2,7 +2,7 @@
 name = "meta"
 version = "0.1.0"
 authors = ["Jonathan Lemos <jonathanlemos@protonmail.com>"]
-description = "A command-line utility for managing file metadata."
+description = "A command-line utility for managing file/directory metadata."
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -12,8 +12,10 @@ diesel = { version = "1.4.5", features = ["sqlite"] }
 diesel_migrations = "1.4.0"
 
 atty = "0.2.14"
+bitflags = "1.2.1"
 clap = "2.33.3"
 colored = "2.0.0"
+edit-distance = "2.1.0"
 fancy-regex = "0.4.1"
 serde = { version = "1.0.117", features = ["derive"] }
 serde_json = "1.0.60"

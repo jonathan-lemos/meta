@@ -29,8 +29,6 @@ pub enum HexSequenceError {
 }
 
 fn lex_string_literal(slice: &str) -> Result<usize, StringLiteralLexError> {
-    use serde_json::Error::*;
-
     static QUOTE_REGEX: &Regex = regex_expect(r#"^("|').*?(?<!\)\1"#);
 
     let quot = match QUOTE_REGEX.find(slice)
@@ -92,7 +90,7 @@ fn get_token(slice: &str) -> Result<(usize, LexemeKind), LexError> {
     Err(NonLexableSequence)
 }
 
-pub fn lex(args: ArgsIter, cmdline: &str) -> Result<LexemeQueue, LexError> {
+pub fn lex<'a, 'b>(args: ArgsIter<'a>, cmdline: &'b str) -> Result<LexemeQueue<'a, 'b>, LexError> {
     let a = args.flat_map(|(arg, index)| {
         if arg.contains(" ") {
             [("(", index), (arg, index), (")", index + arg.len() - 1)]
@@ -112,8 +110,9 @@ pub fn lex(args: ArgsIter, cmdline: &str) -> Result<LexemeQueue, LexError> {
             ret.push(Lexeme::new(
                 &slice[..tup.0],
                 tup.1,
-                (&cmdline[index + tup.0..]).slice_until(|c| c.is_whitespace()))
-            );
+            cmdline,
+            index + tup.0
+            ));
         }
     }
 

@@ -13,17 +13,17 @@ pub struct ArgsIter<'a> {
     index: usize,
 }
 
-impl ArgsIter {
+impl ArgsIter<'_> {
     pub fn index(&self) -> usize {
         self.index
     }
 
-    fn peek(&mut self) -> Option<&Self::Item> {
+    fn peek(&mut self) -> Option<&(String, usize)> {
         self.iter.peek()
     }
 }
 
-impl Iterator for ArgsIter {
+impl Iterator for ArgsIter<'_> {
     type Item = (String, usize);
 
     fn next(&mut self) -> Option<Self::Item> {

@@ -115,6 +115,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "edit-distance"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbaaaf38131deb9ca518a274a45bfdb8771f139517b073b16c2d3d32ae5037b"
+
+[[package]]
 name = "fancy-regex"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -172,10 +178,12 @@ name = "meta"
 version = "0.1.0"
 dependencies = [
  "atty",
+ "bitflags",
  "clap",
  "colored",
  "diesel",
  "diesel_migrations",
+ "edit-distance",
  "fancy-regex",
  "serde",
  "serde_json",

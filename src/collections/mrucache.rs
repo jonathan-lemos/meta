@@ -2,6 +2,7 @@ use std::hash::Hash;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::borrow::Borrow;
+use crate::linq::collectors::IntoVec;
 
 struct Node<K: Hash + Eq, V> {
     key: Arc<K>,
@@ -21,17 +22,17 @@ impl<K, V> Node<K, V> {
     }
 }
 
-pub struct NodeIter<K: Hash + Eq, V> {
+pub struct NodeIter<'a, K: Hash + Eq, V> {
     cur: Option<Arc<Node<K, V>>>
 }
 
-impl<K, V> NodeIter<K, V> {
+impl<'a, K, V> NodeIter<'a, K, V> {
     pub fn new(head: Option<Arc<Node<K, V>>>) -> Self {
         NodeIter { cur: head }
     }
 }
 
-impl<'a, K, V> Iterator for NodeIter<K, V> {
+impl<'a, K, V> Iterator for NodeIter<'a, K, V> {
     type Item = (&'a K, &'a V);
 
     fn next(&'a mut self) -> Option<Self::Item> {
