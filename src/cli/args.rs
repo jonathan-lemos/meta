@@ -1,35 +1,47 @@
 use std::env;
 use crate::linq::collectors::IntoVec;
-use std::ops::Range;
-use PickerResult::*;
-use Count::*;
 use crate::format::re::regex_expect;
 use fancy_regex::Regex;
 use crate::cli::program::{program_name, authors, version, description};
 use crate::format::str::StrExtensions;
-use colored::{Colorize, ColoredString};
+use colored::{Colorize};
 use crate::cli::query::args::{Args, ArgsIter};
 use std::process::exit;
-use crate::cli::query::parse::OrQuery;
+use crate::cli::query::parse::{OrQuery, ParseError, parse};
 use std::collections::HashMap;
-use crate::cli::args::SubcommandParseError::MissingFlagValue;
+use crate::cli::args::SubcommandParseError::{MissingFlagValue, UnknownFlag, ExtraPositionalArgument, UnexpectedPositionalArgument, NotEnoughPositionalArguments};
+use crate::cli::query::lex::{lex, LexError};
+
+bitflags! {
+    pub struct FileSelector: u8 {
+        const NONE = 0x1;
+        const FILE_LIST = 0x2;
+        const QUERY = 0x4;
+    }
+}
 
 pub enum FileEntryExpr {
     List(Vec<String>),
     Expr(OrQuery)
 }
 
-pub struct SubcommandParseResults<'a> {
-    flags: Vec<(&'a Flag, Option<String>, String)>,
-    positional: Vec<(&'a Positional, Vec<String>)>,
+pub struct SubcommandParseResults {
+    flags: Vec<(Flag, Option<String>, String)>,
+    positional: Vec<String>,
     expr: Option<FileEntryExpr>,
 }
 
 pub enum SubcommandParseError<'a> {
-    MissingFlagValue(&'a Flag)
+    MissingFlagValue(&'a Flag),
+    UnknownFlag(String, usize),
+    LexError(LexError),
+    ParseError(ParseError),
+    UnexpectedPositionalArgument(String, usize),
+    ExtraPositionalArgument(&'a Positional, String, usize),
+    NotEnoughPositionalArguments(&'a Positional)
 }
 
-pub fn parse_subcommand<'a>(sc: &'a Subcommand, mut args: ArgsIter) -> Result<SubcommandParseResults<'a>, SubcommandParseError<'a>> {
+pub fn parse_subcommand<'a>(sc: &'a Subcommand, mut args: ArgsIter, cmdline: &str) -> Result<SubcommandParseResults, SubcommandParseError<'a>> {
     let mut flags = Vec::new();
     let mut positional = Vec::new();
     let mut expr = None;
@@ -43,7 +55,7 @@ pub fn parse_subcommand<'a>(sc: &'a Subcommand, mut args: ArgsIter) -> Result<Su
 
     let mut parse_flags = true;
 
-    for (arg, index) in args {
+    'outer: for (arg, index) in args {
         if parse_flags {
             if arg == "--" {
                 parse_flags = false;
@@ -64,15 +76,15 @@ pub fn parse_subcommand<'a>(sc: &'a Subcommand, mut args: ArgsIter) -> Result<Su
                             None
                         };
 
-                        flags.push((s, eq, arg));
-                        break;
+                        flags.push(((*s).clone(), eq, arg));
+                        continue 'outer;
                     }
 
                     if t.contains("=") {
                         let spl = t.splitn(2, '=').into_vec();
                         let (key, value) = (spl[0], spl.get(1));
 
-                        if let Some(s) = map.get(t) {
+                        if let Some(s) = map.get(key) {
                             let eq = if s.equals_name.is_some() {
                                 match value {
                                     Some(s) => Some(s),
@@ -82,57 +94,76 @@ pub fn parse_subcommand<'a>(sc: &'a Subcommand, mut args: ArgsIter) -> Result<Su
                                 None
                             };
 
-                            flags.push((s, eq, arg));
-                            break;
+                            flags.push(((*s).clone(), eq.map(|x| x.to_string()), arg));
+                            continue 'outer;
                         }
                     }
                 }
             }
 
+            if arg.starts_with("-") {
+                return Err(UnknownFlag(arg, index));
+            }
+        }
+
+        if arg == "where" {
+            let mut lexemes = lex(args, cmdline).map_err(SubcommandParseError::LexError)?;
+            let query = parse(&mut lexemes).map_err(SubcommandParseError::LexError)?;
+            expr = Some(FileEntryExpr::Expr(query));
+            break;
+        }
+
+        if arg == "from" {
+            let vec = args.map(|x| x.0).into_vec();
+            expr = Some(FileEntryExpr::List(vec));
+            break;
+        }
+
+        match &sc.positional {
+            Some(p) => {
+                positional.push(arg);
+                if let Some(max) = p.count.1 {
+                    if positional.len() > max {
+                        return Err(ExtraPositionalArgument(p, arg.clone(), index))
+                    }
+                }
+            }
+            None => return Err(UnexpectedPositionalArgument(arg, index))
+        }
+
+    }
+
+    if let Some(p) = &sc.positional {
+        if positional.len() < p.count.1.unwrap_or(0) {
+            return Err(NotEnoughPositionalArguments(p))
         }
     }
 
     Ok(SubcommandParseResults {flags, positional, expr})
 }
 
-
-#[derive(Eq, PartialEq, Clone, Debug)]
-pub enum Count {
-    Range(Range<usize>),
-    Func(dyn FnMut(&[&str]) -> PickerResult)
-}
-
-#[derive(Eq, PartialEq, Clone, Debug)]
-pub enum PickerResult {
-    More,
-    PossibleMore,
-    Complete,
-    Invalid(String),
-    Less
-}
-
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub struct Positional {
-    name: &'static str,
-    count: Count,
-    description: &'static str,
+    pub(crate) name: &'static str,
+    pub(crate) count: (Option<usize>, Option<usize>),
+    pub(crate) description: &'static str,
 }
 
 #[derive(Eq, PartialEq, Clone, Debug)]
-struct Flag {
-    aliases: Vec<&'static str>
-    equals_name: Option<&'static str>,
-    description: &'static str,
+pub struct Flag {
+    pub(crate) aliases: Vec<&'static str>,
+    pub(crate) equals_name: Option<&'static str>,
+    pub(crate) description: &'static str,
 }
 
 #[derive(Eq, PartialEq, Clone, Debug)]
-struct Subcommand {
-    name: &'static str,
-    description: &'static str,
-    positional: Vec<Positional>,
-    file_entry_expr: bool,
-    flags: Vec<Flag>,
-    parse_args: dyn FnOnce(dyn Iterator<Item=(String, usize)>, &str, &'static str) -> (),
+pub struct Subcommand {
+    pub(crate) name: &'static str,
+    pub(crate) description: &'static str,
+    pub(crate) positional: Option<Positional>,
+    pub(crate) file_selector: FileSelector,
+    pub(crate) flags: Vec<Flag>,
+    pub(crate) on_parse: dyn FnOnce(SubcommandParseResults),
 }
 
 pub static ASSIGN_RE: &Regex = regex_expect(r"^([a-zA-Z0-9_-]+)=(.+)$");
@@ -185,37 +216,19 @@ pub fn is_keyword(s: &str) -> bool {
     KEYWORDS.iter().any(|kw| s == kw)
 }
 
-pub fn key_count(strs: &[&str]) -> PickerResult {
-    if strs.len() == 0 {
-        return PossibleMore
-    }
-
-    match key_list(strs) {
-        Ok(s) => {
-            if s.last().filter(|s| is_keyword(&s.to_lowercase())).is_some() {
-                Less
-            }
-            else {
-                PossibleMore
-            }
-        },
-        Err(e) => Invalid(format!("Double comma detected in {}", strs.last().unwrap()))
-    }
-}
-
-static HELP_FLAG: Flag = Flag {
+pub static HELP_FLAG: Flag = Flag {
     aliases: vec!["--help", "-h"],
     equals_name: None,
     description: "Displays the help for this command."
 };
 
-static QUIET_FLAG: Flag = Flag {
+pub static QUIET_FLAG: Flag = Flag {
     aliases: vec!["--quiet", "q"],
     equals_name: None,
     description: "Displays less information about what the command is doing."
 };
 
-static RECURSIVE_FLAG: Flag = Flag {
+pub static RECURSIVE_FLAG: Flag = Flag {
     aliases: vec!["--recursive", "-r"],
     equals_name: None,
     description: "The command will be recursively applied to the contents of any directories given."

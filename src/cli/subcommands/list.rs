@@ -1,14 +1,14 @@
-use crate::cli::args::{Flag, HELP_FLAG, Positional, QUIET_FLAG, RECURSIVE_FLAG, Subcommand, FileSelector};
+use crate::cli::args::{Flag, HELP_FLAG, Positional, QUIET_FLAG, RECURSIVE_FLAG, Subcommand};
 
 static SUBCOMMAND: Subcommand = Subcommand {
-    name: "get",
-    description: "Retrieves key/value pairs.",
+    name: "list",
+    description: "Lists files matching an expression.",
     positional: Some(Positional {
         name: "([key,]*key)?",
         count: (None, None),
         description: "The command will print the values for the given keys. If no keys are given, it will print all key/value pairs.",
     }),
-    file_selector: FileSelector::FILE_LIST | FileSelector::QUERY,
+    file_entry_expr: true,
     flags: vec![HELP_FLAG, QUIET_FLAG, RECURSIVE_FLAG],
     on_parse: |e| {},
 };

@@ -3,7 +3,7 @@ use std::ops::{Index, Range};
 use std::slice::Iter;
 use std::iter::{Peekable, Fuse};
 
-pub struct Args {
+pub struct Args<'a> {
     args: Vec<(String, usize)>,
     cmdline: String
 }
