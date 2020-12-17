@@ -11,6 +11,8 @@ use crate::cli::query::parse::{OrQuery, ParseError, parse};
 use std::collections::HashMap;
 use crate::cli::args::SubcommandParseError::{MissingFlagValue, UnknownFlag, ExtraPositionalArgument, UnexpectedPositionalArgument, NotEnoughPositionalArguments};
 use crate::cli::query::lex::{lex, LexError};
+use super::subcommands::{get, list, remove, set};
+use crate::cli::help::{print_help, print_version};
 
 bitflags! {
     pub struct FileSelector: u8 {
@@ -130,7 +132,6 @@ pub fn parse_subcommand<'a>(sc: &'a Subcommand, mut args: ArgsIter, cmdline: &st
             }
             None => return Err(UnexpectedPositionalArgument(arg, index))
         }
-
     }
 
     if let Some(p) = &sc.positional {
@@ -235,149 +236,15 @@ pub static RECURSIVE_FLAG: Flag = Flag {
 };
 
 static SUBCOMMANDS: &[Subcommand] = &[
-    Subcommand {
-        name: "get",
-        description: "Retrieves key/value pairs.",
-        positional: vec![
-            Positional {
-                name: "([key,]*key)?",
-                count: Func(key_count),
-                description: "The command will print the values for the given keys. If no keys are given, it will print all key/value pairs."
-            }
-        ],
-        file_entry_expr: true,
-        flags: vec![HELP_FLAG, QUIET_FLAG, RECURSIVE_FLAG],
-    },
-    Subcommand {
-        name: "set",
-        description: "Sets the value associated with a key.",
-        positional: vec![
-            Positional {
-                name: "(key=value)+",
-                count: Func(|strs| {
-                    match strs.len() {
-                        0 => More,
-                        _ => {
-                            if ASSIGN_RE.is_match(strs.last().unwrap()) {
-                                PossibleMore
-                            }
-                            else {
-                                if strs.len() == 1 {Invalid} else {Less}
-                            }
-                        }
-                    }
-                }),
-                description: "One or more key=value assignments, meaning assign the value to the key."
-            }
-        ],
-        file_entry_expr: true,
-        flags: vec![HELP_FLAG, QUIET_FLAG, RECURSIVE_FLAG],
-    },
-    Subcommand {
-        name: "remove",
-        description: "Removes metadata.",
-        positional: vec![
-            Positional {
-                name: "([key,]*key)*",
-                count: Func(key_count),
-                description: "The command will remove the given keys."
-            }
-        ],
-        file_entry_expr: true,
-        flags: vec![HELP_FLAG, QUIET_FLAG, Flag {
-            long: "--all",
-            short: Some("-a"),
-            equals_name: None,
-            description: "Removes all of the keys from the given targets."
-        }],
-    },
+    get::SUBCOMMAND,
+    list::SUBCOMMAND,
+    set::SUBCOMMAND,
+    remove::SUBCOMMAND
 ];
 
 static FLAGS: &[Flag] = &[
     HELP_FLAG
 ];
-
-
-static WIDTH: Option<usize> = term_size::dimensions_stdout().map(|x| x.1);
-
-fn println_col(begin: usize, s: String) {
-    println!("{}", &s.col_begin_end(begin, WIDTH));
-}
-
-fn print_col(begin: usize, s: String) {
-    print!("{}", &s.col_begin_end(begin, WIDTH));
-}
-
-pub fn print_version() {
-    println_col(0, format!("{} {}", program_name(), version().bold().yellow()));
-}
-
-pub fn print_help(prog_invocation: &str) {
-    const INDENT: usize = 4;
-    let width = term_size::dimensions_stdout().map(|x| x.1);
-
-    let pln = |begin: usize, s: String| {
-        println!("{}", &s.col_begin_end(begin, width))
-    };
-
-    let prt = |begin: usize, s: String| {
-        print!("{}", &s.col_begin_end(begin, width))
-    };
-
-    let flag_desc = |f: &Flag| {
-        match f.short {
-            Some(s) => f.long.to_owned() + ", " + s,
-            None => f.long.to_owned()
-        }
-    };
-
-    let mut comm = SUBCOMMANDS.clone();
-    comm.sort_by_key(|k| k.name);
-    let global_subcomm_len = comm.iter().map(|x| x.name.len()).max();
-
-    let mut global_flags = FLAGS.clone();
-    global_flags.sort_by_key(|k| k.long);
-    let global_flag_desc = global_flags.iter().map(flag_desc).into_vec();
-    let global_flag_desc_len = global_flag_desc.iter().map(|x| x.len()).max();
-
-    // meta 1.0.0
-    pln(0, format!("{} {}", program_name().bold().yellow(), version()));
-    // A command-line utility for managing file/directory metadata.
-    pln(0, description().to_owned());
-
-    // USAGE:
-    pln(0, "USAGE:".to_owned());
-    //     meta [flags*] [subcommand] [subcommand-argument*]
-    pln(INDENT, format!("{} {} {} {}", prog_invocation, "[flags*]".italic(), "[subcommand]".italic(), "[subcommand-argument*]".italic()));
-
-    println!();
-    // FLAGS:
-    pln(0, "FLAGS:".to_owned());
-
-    for (flag, desc) in global_flags.iter().zip(global_flag_desc.iter()) {
-        let desc_begin = INDENT + global_flag_desc_len.unwrap() + INDENT;
-        // -f, --flag
-        print!("{}", flag.col_begin_end_indent(INDENT, width));
-        //               description
-        pln(desc_begin, desc.clone());
-        println!();
-    }
-
-    println!();
-    // SUBCOMMANDS:
-    pln(0, "SUBCOMMANDS:".to_owned());
-
-    for subcommand in comm {
-        let desc_begin = INDENT + global_subcomm_len.unwrap() + INDENT;
-        // subcommand
-        print!("{}", subcommand.name.col_begin_end_indent(INDENT, width));
-        //               description
-        pln(desc_begin, subcommand.description.to_owned());
-        println!();
-    }
-
-    pln(0, format!("For more details about a subcommand, type {} {} {}", prog_invocation, "[subcommand]", "--help"))
-}
 
 pub fn parse_command_line_args() {
     let raw = env::args().into_vec();
@@ -386,7 +253,7 @@ pub fn parse_command_line_args() {
     for (arg, index) in args.iter().skip(1) {
         match arg.to_lowercase().as_str() {
             "--help" | "-h" | "help" => {
-                print_help(&args[0].0);
+                print_help(SUBCOMMANDS, FLAGS, &args[0].0);
                 exit(0);
             },
             "--version" | "-v" | "version" => {

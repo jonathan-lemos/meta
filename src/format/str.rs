@@ -67,18 +67,6 @@ pub trait StrExtensions {
     fn col_begin_end_indent(&self, begin: usize, end: Option<usize>) -> String;
 }
 
-impl Mul<usize> for &str {
-    type Output = String;
-
-    fn mul(self, rhs: usize) -> Self::Output {
-        let mut ret = self.to_owned();
-        for _ in 0..rhs {
-            ret += self.clone();
-        }
-        ret
-    }
-}
-
 impl StrExtensions for &str {
     fn slice_until<F: FnMut(char) -> bool>(&self, until: F) -> &str {
         let iter = self.char_iterator();

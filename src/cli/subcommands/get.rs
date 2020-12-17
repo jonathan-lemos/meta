@@ -1,6 +1,6 @@
 use crate::cli::args::{Flag, HELP_FLAG, Positional, QUIET_FLAG, RECURSIVE_FLAG, Subcommand, FileSelector};
 
-static SUBCOMMAND: Subcommand = Subcommand {
+pub(crate) static SUBCOMMAND: Subcommand = Subcommand {
     name: "get",
     description: "Retrieves key/value pairs.",
     positional: Some(Positional {

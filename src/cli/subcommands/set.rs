@@ -1,6 +1,6 @@
 use crate::cli::args::{Positional, Subcommand, HELP_FLAG, QUIET_FLAG, RECURSIVE_FLAG};
 
-static SUBCOMMAND: Subcommand = Subcommand {
+pub(crate) static SUBCOMMAND: Subcommand = Subcommand {
     name: "set",
     description: "Sets the value associated with a key.",
     positional: Some(Positional {

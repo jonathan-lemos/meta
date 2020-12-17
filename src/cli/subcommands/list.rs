@@ -1,6 +1,6 @@
 use crate::cli::args::{Flag, HELP_FLAG, Positional, QUIET_FLAG, RECURSIVE_FLAG, Subcommand};
 
-static SUBCOMMAND: Subcommand = Subcommand {
+pub(crate) static SUBCOMMAND: Subcommand = Subcommand {
     name: "list",
     description: "Lists files matching an expression.",
     positional: Some(Positional {
