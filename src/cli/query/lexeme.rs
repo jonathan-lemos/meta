@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use crate::cli::query::args::ArgsIter;
 use crate::linq::collectors::IntoVec;
+use std::borrow::Borrow;
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct OwnedLexeme {
@@ -11,25 +12,18 @@ pub struct OwnedLexeme {
     pub cmdline_index: usize
 }
 
-#[derive(Debug, Eq, PartialEq, Clone)]
+impl<'a> Borrow<Lexeme<'a, 'a>> for OwnedLexeme {
+    fn borrow(&'a self) -> &Lexeme<'a, 'a> {
+        &Lexeme{token: &self.token, kind: self.kind, cmdline_ptr: &self.cmdline, cmdline_index: self.cmdline_index}
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub struct Lexeme<'a, 'b> {
     token: &'a str,
     kind: LexemeKind,
     cmdline_ptr: &'b str,
     cmdline_index: usize
-}
-
-impl<'a, 'b> ToOwned for Lexeme<'a, 'b> {
-    type Owned = OwnedLexeme;
-
-    fn to_owned(&self) -> Self::Owned {
-        OwnedLexeme {
-            token: self.token.to_owned(),
-            kind: self.kind,
-            cmdline: self.cmdline_ptr.to_owned(),
-            cmdline_index: self.cmdline_index
-        }
-    }
 }
 
 impl<'a, 'b> Lexeme<'a, 'b> {
@@ -47,6 +41,15 @@ impl<'a, 'b> Lexeme<'a, 'b> {
 
     pub fn cmdline(&self) -> &str {
         self.cmdline_ptr
+    }
+
+    pub fn to_owned(&self) -> OwnedLexeme {
+        OwnedLexeme {
+            token: self.token.to_owned(),
+            kind: self.kind,
+            cmdline: self.cmdline_ptr.to_owned(),
+            cmdline_index: self.cmdline_index
+        }
     }
 }
 

@@ -90,7 +90,7 @@ fn get_token(slice: &str) -> Result<(usize, LexemeKind), LexError> {
     Err(NonLexableSequence)
 }
 
-pub fn lex<'a, 'b>(args: ArgsIter<'a>, cmdline: &'b str) -> Result<LexemeQueue<'a, 'b>, LexError> {
+pub fn lex<'a, 'b, I: Iterator<Item=(String, usize)>>(args: I, cmdline: &'b str) -> Result<LexemeQueue<'a, 'b>, LexError> {
     let a = args.flat_map(|(arg, index)| {
         if arg.contains(" ") {
             [("(", index), (arg, index), (")", index + arg.len() - 1)]

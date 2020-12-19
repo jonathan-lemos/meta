@@ -13,6 +13,7 @@ use crate::cli::args::SubcommandParseError::{MissingFlagValue, UnknownFlag, Extr
 use crate::cli::query::lex::{lex, LexError};
 use super::subcommands::{get, list, remove, set};
 use crate::cli::help::{print_help, print_version};
+use crate::cli::print::{log, Logger};
 
 bitflags! {
     pub struct FileSelector: u8 {
@@ -33,17 +34,29 @@ pub struct SubcommandParseResults {
     expr: Option<FileEntryExpr>,
 }
 
+pub struct ArgError {
+    pub arg: String,
+    pub position: usize,
+    pub cmdline: String
+}
+
+impl ArgError {
+    pub fn new(arg: String, position: usize, cmdline: &str) -> Self {
+        ArgError { arg, position, cmdline: cmdline.to_owned() }
+    }
+}
+
 pub enum SubcommandParseError<'a> {
-    MissingFlagValue(&'a Flag),
-    UnknownFlag(String, usize),
+    MissingFlagValue(&'a Flag, ArgError),
+    UnknownFlag(ArgError),
     LexError(LexError),
     ParseError(ParseError),
-    UnexpectedPositionalArgument(String, usize),
-    ExtraPositionalArgument(&'a Positional, String, usize),
+    UnexpectedPositionalArgument(ArgError),
+    ExtraPositionalArgument(&'a Positional, ArgError),
     NotEnoughPositionalArguments(&'a Positional)
 }
 
-pub fn parse_subcommand<'a>(sc: &'a Subcommand, mut args: ArgsIter, cmdline: &str) -> Result<SubcommandParseResults, SubcommandParseError<'a>> {
+pub fn parse_subcommand<'a, I: Iterator<Item=(String, usize)>>(sc: &'a Subcommand, mut args: I, cmdline: &str) -> Result<SubcommandParseResults, SubcommandParseError<'a>> {
     let mut flags = Vec::new();
     let mut positional = Vec::new();
     let mut expr = None;
@@ -72,7 +85,7 @@ pub fn parse_subcommand<'a>(sc: &'a Subcommand, mut args: ArgsIter, cmdline: &st
                         let eq = if s.equals_name.is_some() {
                             match args.next() {
                                 Some(s) => Some(s.0),
-                                None => return Err(MissingFlagValue(s))
+                                None => return Err(MissingFlagValue(s, ArgError::new(arg, index, cmdline)))
                             }
                         } else {
                             None
@@ -90,7 +103,7 @@ pub fn parse_subcommand<'a>(sc: &'a Subcommand, mut args: ArgsIter, cmdline: &st
                             let eq = if s.equals_name.is_some() {
                                 match value {
                                     Some(s) => Some(s),
-                                    None => return Err(MissingFlagValue(s))
+                                    None => return Err(MissingFlagValue(s, ArgError::new(arg, index, cmdline)))
                                 }
                             } else {
                                 None
@@ -104,7 +117,7 @@ pub fn parse_subcommand<'a>(sc: &'a Subcommand, mut args: ArgsIter, cmdline: &st
             }
 
             if arg.starts_with("-") {
-                return Err(UnknownFlag(arg, index));
+                return Err(UnknownFlag(ArgError::new(arg, index, cmdline)));
             }
         }
 
@@ -126,11 +139,11 @@ pub fn parse_subcommand<'a>(sc: &'a Subcommand, mut args: ArgsIter, cmdline: &st
                 positional.push(arg);
                 if let Some(max) = p.count.1 {
                     if positional.len() > max {
-                        return Err(ExtraPositionalArgument(p, arg.clone(), index))
+                        return Err(ExtraPositionalArgument(p, ArgError::new(arg, index, cmdline)))
                     }
                 }
             }
-            None => return Err(UnexpectedPositionalArgument(arg, index))
+            None => return Err(UnexpectedPositionalArgument(ArgError::new(arg, index, cmdline)))
         }
     }
 
@@ -164,7 +177,7 @@ pub struct Subcommand {
     pub(crate) positional: Option<Positional>,
     pub(crate) file_selector: FileSelector,
     pub(crate) flags: Vec<Flag>,
-    pub(crate) on_parse: dyn FnOnce(SubcommandParseResults),
+    pub(crate) on_parse: Box<dyn FnOnce(SubcommandParseResults)>,
 }
 
 pub static ASSIGN_RE: &Regex = regex_expect(r"^([a-zA-Z0-9_-]+)=(.+)$");
@@ -246,11 +259,12 @@ static FLAGS: &[Flag] = &[
     HELP_FLAG
 ];
 
-pub fn parse_command_line_args() {
+pub fn parse_command_line_args() -> () {
     let raw = env::args().into_vec();
     let args = Args::new(raw.iter().collect());
+    let a = args.iter().skip(1);
 
-    for (arg, index) in args.iter().skip(1) {
+    for (arg, index) in a {
         match arg.to_lowercase().as_str() {
             "--help" | "-h" | "help" => {
                 print_help(SUBCOMMANDS, FLAGS, &args[0].0);
@@ -263,7 +277,29 @@ pub fn parse_command_line_args() {
             _ => {}
         }
 
-
+        for sc in SUBCOMMANDS {
+            if sc.name == arg.to_lowercase() {
+                let res = match parse_subcommand(sc, a, args.cmdline()) {
+                    Ok(s) => s,
+                    Err(e) => match e {
+                        MissingFlagValue(e, a) => {
+                            log().error(&format!("The flag {0} is missing a value. Specify {0}={1} or {0} {1}", a.arg.bold().yellow(), "value".green().italic()));
+                            log().cmdline(&a.cmdline, a.position, a.arg.chars().count());
+                            exit(0);
+                        }
+                        UnknownFlag(a) => {
+                            log().error(&format!("The flag "))
+                        }
+                        SubcommandParseError::LexError(_) => {}
+                        SubcommandParseError::ParseError(_) => {}
+                        UnexpectedPositionalArgument(_, _) => {}
+                        ExtraPositionalArgument(_, _, _) => {}
+                        NotEnoughPositionalArguments(_) => {}
+                    }
+                }
+                return;
+            }
+        }
     }
 }
 
