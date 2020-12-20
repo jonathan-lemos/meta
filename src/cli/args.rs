@@ -14,6 +14,8 @@ use crate::cli::query::lex::{lex, LexError};
 use super::subcommands::{get, list, remove, set};
 use crate::cli::help::{print_help, print_version};
 use crate::cli::print::{log, Logger};
+use crate::cli::typo::typos_threshold;
+use crate::cli::lang;
 
 bitflags! {
     pub struct FileSelector: u8 {
@@ -279,19 +281,59 @@ pub fn parse_command_line_args() -> () {
 
         for sc in SUBCOMMANDS {
             if sc.name == arg.to_lowercase() {
+                let log_cmdline = || log().cmdline(&a.cmdline, a.position, a.arg.chars().count());
+
                 let res = match parse_subcommand(sc, a, args.cmdline()) {
                     Ok(s) => s,
                     Err(e) => match e {
                         MissingFlagValue(e, a) => {
                             log().error(&format!("The flag {0} is missing a value. Specify {0}={1} or {0} {1}", a.arg.bold().yellow(), "value".green().italic()));
-                            log().cmdline(&a.cmdline, a.position, a.arg.chars().count());
+                            log_cmdline();
                             exit(0);
                         }
                         UnknownFlag(a) => {
-                            log().error(&format!("The flag "))
+                            if sc.flags.len() == 0 {
+                                log().error(&format!(
+                                    "A flag {0} was given, but the {1} subcommand does not accept any flags. Type {2} {1} --help for more information. If you want to specify {0} as a positional argument, put it after a {3} argument.",
+                                    a.arg.bold().red(),
+                                    sc.name.bold().yellow(),
+                                    args[0].0,
+                                    "--".bold().green()
+                                ));
+                                log_cmdline();
+                                return;
+                            }
+
+                            let typos = typos_threshold(&a.arg, sc.flags.iter().flat_map(|x| x.aliases), 0.25, 2);
+                            let or = lang::or(typos.iter().map(|x| x.0)).split(", ").map(|x| x.yellow().bold()).into_vec().join(", ");
+
+                            if typos.len() == 0 {
+                                log().error(&format!{
+                                    "An unknown flag {0} was given. Type {2} {1} --help for a list of accepted flags. If you want to specify {0} as a positional argument, put it after a {3} argument.",
+                                    a.arg.bold().red(),
+                                    sc.name.bold().yellow(),
+                                    args[0].0,
+                                    "--".bold().green()
+                                });
+                            }
+                            else {
+                                log().error(&format!{
+                                    "An unknown flag {0} was given. Did you mean {1}? Type {3} {2} --help for a list of accepted flags. If you want to specify {0} as a positional argument, put it after a {4} argument.",
+                                    a.arg.bold().red(),
+                                    or,
+                                    sc.name.bold().yellow(),
+                                    args[0].0,
+                                    "--".bold().green()
+                                });
+                            }
+                            log_cmdline();
                         }
-                        SubcommandParseError::LexError(_) => {}
-                        SubcommandParseError::ParseError(_) => {}
+                        SubcommandParseError::LexError(a) => {
+                            log().error(&format!("The token {0} was unrecognized.", a.arg.bold().red()));
+                            log_cmdline();
+                        }
+                        SubcommandParseError::ParseError(a) => {
+                        }
                         UnexpectedPositionalArgument(_, _) => {}
                         ExtraPositionalArgument(_, _, _) => {}
                         NotEnoughPositionalArguments(_) => {}

@@ -11,10 +11,11 @@ use self::StringLiteralLexError::*;
 use self::HexSequenceError::*;
 use crate::cli::query::args::ArgsIter;
 use crate::cli::query::lexeme::EqualityKind;
+use crate::cli::args::ArgError;
 
 pub enum LexError {
     StringError(StringLiteralLexError),
-    NonLexableSequence,
+    UnknownToken(ArgError),
 }
 
 pub enum StringLiteralLexError {
